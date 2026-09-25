@@ -8,7 +8,7 @@ This document covers:
 - the parser-synthesised Tier 1 `System.*` floor,
 - the reference/implementation split (ref for `csc /r`, impl for the VEE),
 - the ref-assembly auto-generator,
-- the per-peripheral simulator behaviour,
+- the per-peripheral host behaviour,
 - how a user project is built and packaged,
 - the follow-up work required to target one or more embedded boards via
   host-side AOT compilation.
@@ -28,7 +28,7 @@ contributor needs before touching any of the code.
 
 The Tier 1 floor is *always* present. Tier 2 is opt-in per assembly —
 a build that never wants to touch GPIO simply omits
-`native_gpio_sim_register()` from `main.c`.
+`native_gpio_host_register()` from `main.c`.
 
 ---
 
@@ -39,20 +39,20 @@ runtime/
 ├── framework/                          # C code — the VEE itself
 │   ├── native_bcl.h / native_bcl.c     # registration + lookup infrastructure
 │   ├── native_corelib.c                # Tier 1: System.Object/String/Array/…
-│   ├── native_runtime_sim.c            # Tier 2 target-independent (sim variant)
-│   ├── native_gpio_sim.c
-│   ├── native_i2c_sim.c
-│   ├── native_spi_sim.c
-│   ├── native_uart_sim.c
-│   ├── native_adc_sim.c
-│   ├── native_pwm_sim.c
-│   ├── native_timer_sim.c
-│   ├── native_console_sim.c            # optional; convenience wrapper impl
-│   └── host/                           # OS abstraction — the ONLY OS-specific code
-│       ├── host_stdio.h                # portable stdin/stdout/stderr surface
-│       ├── host_thread.h               # pthread / win-thread abstraction
-│       ├── host_clock.h                # monotonic clock + sleep + high-res timers
-│       ├── host_fs.h                   # DLL search, config file load (sim only)
+│   ├── native_runtime_host.c            # Tier 2 target-independent (host variant)
+│   ├── native_gpio_host.c
+│   ├── native_i2c_host.c
+│   ├── native_spi_host.c
+│   ├── native_uart_host.c
+│   ├── native_adc_host.c
+│   ├── native_pwm_host.c
+│   ├── native_timer_host.c
+│   ├── native_console_host.c            # optional; convenience wrapper impl
+│   └── platform/                       # OS abstraction — the ONLY OS-specific code
+│       ├── platform_stdio.h            # portable stdin/stdout/stderr surface
+│       ├── platform_thread.h           # pthread / win-thread abstraction
+│       ├── platform_clock.h            # monotonic clock + sleep + high-res timers
+│       ├── platform_fs.h               # DLL search, config file load (host target only)
 │       ├── linux/                      # POSIX backends: posix_stdio.c, pthread_thread.c, …
 │       ├── windows/                    # Win32 backends: win_stdio.c, win_thread.c, …
 │       └── macos/                      # (POSIX reuses linux/; only macOS-specific bits here)
@@ -86,7 +86,7 @@ runtime/
     │   ├── Native.Gpio.dll
     │   └── …
     └── impl/
-        └── sim/                        # loaded by the desktop VEE at run time
+        └── host/                        # loaded by the desktop VEE at run time
             ├── Native.Runtime.dll
             ├── Native.Gpio.dll
             └── …
@@ -97,28 +97,36 @@ That makes the ref/impl split explicit at the filesystem level and lets
 a future embedded-board tree slot straight in.
 
 Embedded board targets do **not** appear under `build/impl/` — they do
-not load DLLs at run time. Their C bindings live alongside the sim ones
+not load DLLs at run time. Their C bindings live alongside the host ones
 in `framework/` (e.g. `native_gpio_stm32h7.c`, `native_gpio_esp32.c`)
 and are consumed at *link* time by the host-side AOT toolchain described
 in §9. `build/impl/<board>/` does not exist because there is nothing to
 put in it.
 
-**OS abstraction is mandatory, not optional.** The `framework/host/`
+**OS abstraction is mandatory, not optional.** The `framework/platform/`
 subtree is the **only** place in the codebase where OS-specific code
-lives. Every other C file in `framework/` compiles on any C99 host with
+lives. Every other C file in `framework/` compiles on any C99 toolchain with
 the standard library alone. This separation exists so:
 
-- The sim runs unchanged on Linux, macOS, and Windows.
+- The host target runs unchanged on Linux, macOS, and Windows.
 - The same abstraction survives verbatim on a hosted embedded target
   (a Linux-hosted Cortex-A board, a QEMU harness, a Zephyr shim).
-- On bare-metal targets the host layer is stubbed out (`host_thread.h`
-  becomes a header-only no-op, `host_fs.h` disappears entirely) rather
-  than #ifdef'd inside every source file.
+- On bare-metal targets the platform layer is stubbed out
+  (`platform_thread.h` becomes a header-only no-op, `platform_fs.h`
+  disappears entirely) rather than #ifdef'd inside every source file.
 
-Every `native_*_sim.c` calls **only** the `host_*.h` surface — never
+Every `native_*_host.c` calls **only** the `platform_*.h` surface — never
 `pthread_create`, `clock_gettime`, `CreateFileW`, or similar directly.
-Any code review that spots a raw OS symbol outside `framework/host/` is
-a defect.
+Any code review that spots a raw OS symbol outside `framework/platform/`
+is a defect.
+
+> **Terminology.** Two distinct axes both once used the word "host":
+> `framework/platform/` abstracts **which OS** the build runs on, while
+> **host** as a *target* (`native_*_host.c`, `build/impl/host/`) means
+> the developer's computer as opposed to an MCU board. The word
+> "simulator" is deliberately avoided throughout: nothing here emulates
+> a target CPU or its peripherals. The host target is the same C source
+> compiled natively, with `Native.*` bound to OS services.
 
 ---
 
@@ -129,7 +137,7 @@ a defect.
 The Tier 1 floor is exactly the set of types the C# compiler cannot
 compile without. Each is registered from
 `framework/native_corelib.c` via
-`vee_native_type_register` **before** the class loader touches any
+`native_type_register` **before** the class loader touches any
 assembly:
 
 | Type                                                   | Kind          | Notes |
@@ -208,7 +216,7 @@ namespace Native.Runtime {
         public static void Reboot()                       { throw null; }
         public static void Halt(int exitCode)             { throw null; }
     }
-    public static class HostIo {                          /* sim only */
+    public static class HostIo {                          /* host only */
         public static int ReadByte()                      { throw null; }
         public static void WriteByte(byte b)              { throw null; }
     }
@@ -218,7 +226,7 @@ namespace Native.Runtime {
 }
 ```
 
-Sim impl backs each method with `clock_gettime`, `usleep`, `_exit`,
+Host impl backs each method with `clock_gettime`, `usleep`, `_exit`,
 `stdin`/`stdout`, and `memcpy` from `FieldRVA.Data`.
 
 ### 4.2 `Native.Gpio`
@@ -241,7 +249,7 @@ namespace Native.Gpio {
 }
 ```
 
-Sim impl: `WriteDigital` logs to stdout; `ReadDigital` returns a value
+Host impl: `WriteDigital` logs to stdout; `ReadDigital` returns a value
 from a scripted table (default: last written value); callbacks fire
 from a helper thread when the scripted table produces a transition.
 
@@ -261,7 +269,7 @@ namespace Native.I2c {
 }
 ```
 
-Sim impl reads a JSON file at boot describing per-address canned
+Host impl reads a JSON file at boot describing per-address canned
 responses; a mismatched write triggers a hard fault so tests catch
 protocol regressions immediately.
 
@@ -279,7 +287,7 @@ namespace Native.Spi {
 }
 ```
 
-Sim impl defaults to loopback (`rx[i] = tx[i]`) and can also load a
+Host impl defaults to loopback (`rx[i] = tx[i]`) and can also load a
 scripted response file.
 
 ### 4.5 `Native.Uart`
@@ -297,7 +305,7 @@ namespace Native.Uart {
 }
 ```
 
-Sim impl: port 0 maps to host stdin/stdout; other indices raise
+Host impl: port 0 maps to host stdin/stdout; other indices raise
 `NotSupportedException`.
 
 ### 4.6 `Native.Adc`
@@ -316,7 +324,7 @@ namespace Native.Adc {
 }
 ```
 
-Sim impl: ramp generator by default; can be swapped for a CSV replay
+Host impl: ramp generator by default; can be swapped for a CSV replay
 generator via boot config.
 
 ### 4.7 `Native.Pwm`
@@ -334,7 +342,7 @@ namespace Native.Pwm {
 }
 ```
 
-Sim impl logs each configuration change and does nothing at Start/Stop.
+Host impl logs each configuration change and does nothing at Start/Stop.
 
 ### 4.8 `Native.Timer`
 
@@ -351,12 +359,12 @@ namespace Native.Timer {
 }
 ```
 
-Sim impl uses a dedicated pthread that sleeps and calls back.
+Host impl uses a dedicated pthread that sleeps and calls back.
 
 ### 4.9 `Native.Console`
 
 Only pure-IL assembly in the family; ships one impl variant. Depends
-on `Native.Uart` on the target, `Native.Runtime.HostIo` on the sim.
+on `Native.Uart` on the target, `Native.Runtime.HostIo` on the host.
 
 ```csharp
 namespace Native.Console {
@@ -380,7 +388,7 @@ user's code always says `Native.Console.Out.WriteLine("hi")`.
 
 ### 5.1 What lives in each half
 
-| Aspect                    | Ref assembly (`ref/`)                        | Impl assembly (`impl/<target>/`)                          |
+| Aspect                    | Ref assembly (`ref/`)                         | Impl assembly (`impl/<target>/`)                          |
 |---------------------------|-----------------------------------------------|-----------------------------------------------------------|
 | Public types              | Every public type present                     | Same set, same names                                      |
 | Public method signatures  | Same as impl                                  | Same as ref                                               |
@@ -435,7 +443,7 @@ Running the generator produces:
 function bodies:
 
 ```c
-/* framework/native_gpio_sim.c */
+/* framework/native_gpio_host.c */
 
 #include "native_gpio_bindings.inc"    /* generated */
 
@@ -445,10 +453,10 @@ void nat_Gpio_Pin_SetMode(...)       { ... }
 void nat_Gpio_Pin_WriteDigital(...)  { ... }
 /* etc. */
 
-void native_gpio_sim_register(void)
+void native_gpio_host_register(void)
 {
-    vee_native_register(gpio_intrinsics,        /* from generated header */
-                        NATIVE_GPIO_COUNT);
+    native_register(gpio_intrinsics,            /* from generated header */
+                    NATIVE_GPIO_COUNT);
 }
 ```
 
@@ -457,7 +465,7 @@ diffs stay reviewable.
 
 ### 5.3 Selecting an impl variant at runtime
 
-The sim VEE loads impls by convention: `impl/sim/` first. A launch
+The host VEE loads impls by convention: `impl/host/` first. A launch
 flag (`--native-impl-dir <path>`) overrides for smoke-testing.
 `AssemblyRef` resolution walks the search directories in order and
 picks the first hit whose (name, version, PKT) matches.
@@ -472,16 +480,16 @@ only the C code the AOT step produced.
 
 ---
 
-## 6. Simulator behaviour matrix
+## 6. Host behaviour matrix
 
-| Assembly          | Default sim behaviour                            | Configurable via                                   |
+| Assembly          | Default host behaviour                            | Configurable via                                   |
 |-------------------|--------------------------------------------------|----------------------------------------------------|
 | `Native.Runtime`  | `clock_gettime`, `usleep`, host stdin/stdout     | Environment vars for time-warp factor              |
-| `Native.Gpio`     | Write → stdout log; read → last-written value    | JSON pin-script file (`SIM_GPIO_SCRIPT`)           |
-| `Native.I2c`      | Per-address canned responses; unknown = fault    | JSON transaction file (`SIM_I2C_SCRIPT`)           |
-| `Native.Spi`      | Loopback                                         | JSON transaction file (`SIM_SPI_SCRIPT`)           |
+| `Native.Gpio`     | Write → stdout log; read → last-written value    | JSON pin-script file (`HOST_GPIO_SCRIPT`)           |
+| `Native.I2c`      | Per-address canned responses; unknown = fault    | JSON transaction file (`HOST_I2C_SCRIPT`)           |
+| `Native.Spi`      | Loopback                                         | JSON transaction file (`HOST_SPI_SCRIPT`)           |
 | `Native.Uart`     | Port 0 = host stdio; others = `NotSupported`     | Optional Unix-socket redirection per port          |
-| `Native.Adc`      | Ramp 0..MAX                                      | CSV replay file (`SIM_ADC_CSV`)                    |
+| `Native.Adc`      | Ramp 0..MAX                                      | CSV replay file (`HOST_ADC_CSV`)                    |
 | `Native.Pwm`      | Log only                                         | Optional VCD dump                                  |
 | `Native.Timer`    | pthread with `nanosleep`                         | Time-warp factor shared with `Native.Runtime`      |
 | `Native.Console`  | Wraps host stdio via `Native.Runtime.HostIo`     | —                                                  |
@@ -494,13 +502,13 @@ schema evolves.
 
 ## 7. Building and packaging a user project
 
-End-to-end flow for a user shipping a C# program against the sim:
+End-to-end flow for a user shipping a C# program against the host:
 
 ```mermaid
 flowchart LR
     U[User Program.cs] -->|csc /r ref/*.dll| E[Program.exe]
     R[Native.*.def.h] -->|nativegen| RA[ref/Native.*.dll]
-    R -->|nativegen| IA[impl/sim/Native.*.dll]
+    R -->|nativegen| IA[impl/host/Native.*.dll]
     R -->|nativegen| B[native_*_bindings.inc]
     B --> V[VEE binary]
     IA --> V
@@ -514,7 +522,7 @@ flowchart LR
 3. Users compile their C# program with `csc /r build/ref/*.dll`,
    producing a plain `Program.exe`.
 4. Users launch the VEE with `vee Program.exe`; the loader picks
-   `build/impl/sim/*.dll` for every referenced `Native.*`.
+   `build/impl/host/*.dll` for every referenced `Native.*`.
 
 The user never touches `impl/`. Moving the same `Program.exe` to an
 STM32H7 build would only require the `impl/stm32h7/` tree to exist —
@@ -525,7 +533,7 @@ no rebuild of `Program.exe`.
 ## 8. Testing strategy
 
 - **Per-assembly unit tests** — a small C# fixture per `Native.*`
-  exercises every public API against the sim impl. Golden output for
+  exercises every public API against the host impl. Golden output for
   stdout-facing peripherals (`Native.Gpio`, `Native.Pwm`,
   `Native.Console`) is checked into the repo.
 - **Integration fixtures** — one or two "real" C# programs
@@ -555,7 +563,7 @@ current design does not accidentally close off that path.
 
 The follow-up project generalises "the STM32H7 target" into **any
 resource-constrained board target**. Every such target shares three
-characteristics that the desktop sim does not:
+characteristics that the host build does not:
 
 - No filesystem the VEE can load DLLs from at run time — the flash
   image is monolithic.
@@ -584,7 +592,7 @@ compiler itself are expected.
 
 ### 9.2 Deliverable shape — one self-contained binary per board
 
-Unlike the sim, embedded targets do not load `Native.*.dll` files at
+Unlike the host, embedded targets do not load `Native.*.dll` files at
 run time. The AOT toolchain runs on the developer's host and folds
 five inputs into one flashable image:
 
@@ -603,7 +611,7 @@ Consequences:
 
 - **`Native.*` code is baked in.** The AOT step consumes the ref
   assemblies purely as metadata; every `internalcall` resolves to a
-  direct C symbol at link time. The impl DLLs the sim loads never
+  direct C symbol at link time. The impl DLLs the host loads never
   ship to the device.
 - **`AssemblyRef` resolution is a compile-time operation** on the
   target. The interpreter code paths that walk assembly search paths
@@ -655,7 +663,7 @@ whole model is host-side AOT; the target never compiles anything.
 
 - **All C code is portable ISO-C.** No Linux/POSIX-only calls in
   `framework/`; anything OS-specific is behind the
-  [`framework/host/`](#2-directory-layout) layer described in §2.
+  [`framework/platform/`](#2-directory-layout) layer described in §2.
   That same abstraction survives verbatim on any hosted board target
   (a Linux-hosted QEMU harness, a Zephyr shim) and is stubbed out on
   bare-metal targets.
@@ -708,18 +716,21 @@ each.
    - The **AOT compiler is target-focused** — fixed flash, no
      filesystem, board HAL, single boot-to-`main()` model.
 
-   These can ship as one binary with a `--target sim|<board>` flag,
+   These can ship as one binary with a `--target host|<board>` flag,
    or as two independent tools sharing this repository's parser and
    Tier 1 code. Either way, the split of *what runs where* is
    already decided: the interpreter never runs on the device, the
    AOT compiler never runs on the device.
 
-3. **GC policy.** The nursery + arena on top of the pool allocator
-   sketched in §3.3 of [00_Introduction.md](00_Introduction.md) is a
-   *starting point*, not a commitment. The right answer depends on
-   measurements the interpreter itself will produce — allocation
-   rates, average object lifetime, peak live set, per-generation
-   survival curves for representative workloads. Only once the sim
+3. **GC policy.** The tricolour mark-sweep over a handle heap specified
+   in [11_Memory_Model.md](11_Memory_Model.md) and summarised in §3.3 of
+   [00_Introduction.md](00_Introduction.md) fixes the *addressing* model
+   — handles, not pointers, so compaction never needs pointer fixups —
+   but deliberately leaves the *collection* policy open. The right
+   answer depends on measurements the interpreter itself will produce —
+   allocation rates, average object lifetime, peak live set,
+   per-generation survival curves for representative workloads. Only
+   once the host
    has hosted a real embedded application for long enough to
    characterise those numbers can the target GC be dimensioned.
 
@@ -738,8 +749,8 @@ each.
    swapping one C file — no changes to the class loader, the
    evaluation stack, or the intrinsic tables.
 
-None of these decisions block the current desktop-simulator work.
-The sim exists in part to *generate the evidence* on which they
+None of these decisions block the current host-target work.
+The host exists in part to *generate the evidence* on which they
 will be made.
 
 ---

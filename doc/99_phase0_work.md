@@ -8,6 +8,14 @@ Completion record for **Phase 0** of the roadmap defined in
 
 Status: **complete**.
 
+> **Historical note.** This log was written while the original horizontal
+> phase plan (Phases 0–9) was current. That plan was later superseded by the
+> two-binary split (`cli_pack` / `cli_exec` / `cli_dump`) and the vertical
+> slice plan in [00_Introduction.md §4](00_Introduction.md). Section and
+> phase references below are preserved as written; read them as history, not
+> as the current roadmap. The work recorded here remains valid and is now
+> `cli_pack`'s parser front end.
+
 ---
 
 ## 1. Summary
