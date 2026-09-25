@@ -13,6 +13,7 @@
 
 #define MIN_HEAP_SIZE         ( sizeof( heap_header_t ) + sizeof( void * ) )
 #define HEAP_HEAD_SIZE        sizeof( heap_header_t )
+#define HEAP_MAX_ALLOC        0xFFFCu   /* largest 4-aligned size heap_header_t.size can hold */
 
 #define HEAP_FREE_BLOCK       0xF460
 #define HEAP_USED_BLOCK       0x8AC0
@@ -174,7 +175,7 @@ static heap_header_t * _locate_item( object_t id )
     return( heap_header_t * )( &P_HEAP_DATA.memory[ id - 1 ] );
 }
 
-static heap_header_t * _internal_malloc( uint16_t size )
+static heap_header_t * _internal_malloc( uint32_t size )
 {
 	heap_header_t * p;
 	heap_header_t * p_new;
@@ -183,6 +184,11 @@ static heap_header_t * _internal_malloc( uint16_t size )
 	uint32_t i_size;
 
 	p_mem = NULL;
+
+	if( size > HEAP_MAX_ALLOC )
+	{
+		return NULL;
+	}
 
 	// 32bit allignment
 	i_size = size;
