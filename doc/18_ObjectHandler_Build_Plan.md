@@ -44,7 +44,7 @@ is what makes every item below testable without the rest of the system.
 | OH-2 | Allocator: `heap.c`, free list, `heap_release`, `heap_verify`, stats | **P2** | L | OH-1 | §4 tests |
 | OH-3 | Collector: `gc.c`, roots, scopes, triggers | **P3** | L | OH-2, D5–D7 | §5 tests |
 | OH-4 | Stack: threads, slots, frames | **P4** | M | OH-3 | §6 tests |
-| OH-5 | Typed constructors: `array.c`, `strings.c`, `value.c` | **P5** | M | OH-4, D9 | §7 tests |
+| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-4, D9 | §7 tests |
 | OH-6 | Hardening: sanitizers, coverage, 32-bit release build, stats dump | **P6** | M | OH-2 onward | §8 tests |
 
 D5, D6, D7 and D9 are decisions too, but they are **not** P0: each is consumed
@@ -220,12 +220,22 @@ The full set:
 | `objects_types.h` | `object_id_t`, id macros, `object_handle_t`, `object_space_t`, `object_byref_t`, `OBJECT_H_*`, `OBJECT_K_*` | `OBJECT_` / `objects_` |
 | `obj_handler_config.h` | the single configuration (§0.2) and the debug switches | `OBJECT_` / `HEAP_` / `STACK_` per owner |
 | `obj_handler.h` | umbrella; `obj_handler_init/shutdown`, `obj_handler_config_t`, `obj_handler_host_t`, `obj_handler_status_t` | `obj_handler_` |
-| `heap.h`, `objects.h`, `gc.h`, `stack.h`, `array.h`, `strings.h`, `value.h` | one module each | their own |
+| `heap.h`, `objects.h`, `gc.h`, `stack.h`, `array.h`, `obj_string.h`, `value.h` | one module each | their own |
 
 The `objecthandler` target's include path contains **only**
 `source/objecthandler/`, so `source/types.h` and `source/framework/objects.h`
 are unreachable from inside the library by construction rather than by
 discipline. 14 §1.1's file list is corrected to match.
+
+Isolation keeps `source/` out of the library; it cannot keep the library's
+headers from shadowing *system* headers on the same `-I` path. `strings.h`
+did exactly that — glibc's and newlib's `<string.h>` include `<strings.h>` in
+their default GNU modes, and the copied Ruffus directory failed with 260
+errors under `-I`. **Decision: the string module is `obj_string`** — file,
+`obj_string_` prefix and `OBJ_STRING_` macros — which also moves the prefix
+off `str` + lowercase, reserved for `<string.h>` by C11 §7.31.13. Every other
+name in the table was checked against the standard and common POSIX headers,
+on host gcc and `arm-none-eabi-gcc`, and is clean.
 
 ### D4 — The old draft in `source/framework/`
 
@@ -362,8 +372,9 @@ initialises from a caller-supplied config and refuses a malformed one.
    splits behind `OBJECT_DEBUG_REFS`, `object_handle_t`, `object_byref_t`,
    `OBJECT_H_*`, `OBJECT_K_*`, `object_space_t`.
 2. `obj_handler_config.h` — the single configuration of §0.2:
-   `OBJECT_SPACE_COUNT`, `HEAP_SEGMENTS`, `STRING_ENCODING`, worklist length,
-   scope depth, and the four debug switches with their debug/release defaults.
+   `OBJECT_SPACE_COUNT`, `HEAP_SEGMENTS`, `OBJ_STRING_ENCODING`, worklist
+   length, scope depth, and the four debug switches with their debug/release
+   defaults.
 3. `objects.c` — the `object_spaces[]` table, `objects_space_register`, the
    three resolution paths (handled / flat / indirect→`on_corrupt` in v1),
    `objects_type_of` / `size_of` / `kind_of`, and `objects_write_ref` +
@@ -545,7 +556,7 @@ equal through `value_compare` in OH-5.
 
 ## 7. OH-5 — Typed constructors
 
-**Files:** `array.c/.h`, `strings.c/.h`, `value.c/.h`.
+**Files:** `array.c/.h`, `obj_string.c/.h`, `value.c/.h`.
 
 **Consumes:** D9 string layout and interning (§9). The array payload header is
 **decided** — see below.
@@ -574,9 +585,9 @@ typedef struct {            /* first 8 bytes of an OBJECT_K_ARRAY payload */
    `OBJECT_H_HASREFS` is set from the element type at creation.
    **This deletes `array_shape` from the host struct** (14 §7.5), leaving two
    callbacks and one source of truth for an array's shape.
-2. `strings.c` — UTF-8 bodies per 14 §5.6; `strings_create` *validates* its
-   input and rejects overlong encodings, truncated sequences and surrogates;
-   the intern table comes from the config.
+2. `obj_string.c` — UTF-8 bodies per 14 §5.6; `obj_string_create`
+   *validates* its input and rejects overlong encodings, truncated sequences
+   and surrogates; the intern table comes from the config.
 3. `value.c` — `value_box`/`value_unbox` with a size check; `value_compare`
    over slots, reimplementing Ruffus's mixed-type promotion table with no
    allocation (14 §6.6).
@@ -659,7 +670,7 @@ and OH-4, not deferred.
 
 | Point | Outcome |
 |---|---|
-| Header naming | No `oh_*` anywhere. `objects_types.h` for the shared vocabulary, `obj_handler_config.h` and `obj_handler.h` for the lifecycle, module headers keep their own names — D3, and 14 §1.1 corrected |
+| Header naming | No `oh_*` anywhere. `objects_types.h` for the shared vocabulary, `obj_handler_config.h` and `obj_handler.h` for the lifecycle, module headers keep their own names except `obj_string.h` (2026-09-25), because `strings.h` shadows `<strings.h>` — D3, and 14 §1.1 corrected |
 | Profiles | **One configuration**, not a host one and an MCU one. The only axis is debug versus release — §0.2. This is what keeps the host build a rehearsal for the device |
 | Test system | A full test system, its own P1 slice, layers 3–7 carrying the weight — §2 |
 | Layer-1 framework | **None.** CTest supplies discovery, reporting, filtering and per-case process isolation; `harness.h` supplies the assertion macros and the failure dump. No vendored dependency — §2.2 |

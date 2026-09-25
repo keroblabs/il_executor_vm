@@ -125,7 +125,7 @@ the benefit of the two-binary split, demonstrated a decade before we chose it.
 | `ObjectHandler/` (as a separable component) | **`source/objecthandler/`** | Concept kept and enforced — [14](14_ObjectHandler.md) |
 | `ObjectHandler/heap.c` | `objecthandler/heap.c` | Design ported, file rewritten — §6.2 |
 | `ObjectHandler/gc.c` | `objecthandler/gc.c` | Port algorithm, replace data structures |
-| `ObjectHandler/objects.c`, `strings.c`, `arrays_type.c` | `objecthandler/objects.c`, `strings.c`, `array.c` | Module split and prefixes kept — [14 §1.2](14_ObjectHandler.md) |
+| `ObjectHandler/objects.c`, `strings.c`, `arrays_type.c` | `objecthandler/objects.c`, `obj_string.c`, `array.c` | Module split and prefixes kept; `strings` becomes `obj_string` — [14 §1.1–1.2](14_ObjectHandler.md) |
 | `ObjectHandler/stack.h`, `value_type.c` | — | **Rejected** — see §6.1 |
 | `vm/threads.c` | `cli_exec` scheduler | Model followed closely — [17](17_Threading_Model.md) |
 | `java_classes/` | `Native.*` assemblies | Pattern reused, content discarded |

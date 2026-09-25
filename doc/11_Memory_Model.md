@@ -15,7 +15,7 @@ code must obey. Where the two overlap, 14 is normative.
 
 The `vee_*` and `oh_*` namings used in earlier drafts are retired
 throughout; a name is prefixed with the ObjectHandler module that owns it —
-`objects_`, `heap_`, `stack_`, `strings_`, `value_`, `array_`, `gc_`. See
+`objects_`, `heap_`, `stack_`, `obj_string_`, `value_`, `array_`, `gc_`. See
 [14_ObjectHandler.md §1.2](14_ObjectHandler.md).
 
 Status: **contract — write before the code.** Items marked *(open)* are

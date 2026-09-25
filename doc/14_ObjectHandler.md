@@ -56,7 +56,7 @@ source/objecthandler/
     objects.c/.h          /* identity, spaces, handles, resolution, create */
     heap.c/.h             /* segments, payload allocator, free list        */
     stack.c/.h            /* thread stacks, frames, slots, scratch arena   */
-    strings.c/.h          /* string objects and their operations          */
+    obj_string.c/.h       /* string objects and their operations          */
     value.c/.h            /* boxing, unboxing, numeric conversion, compare */
     array.c/.h            /* arrays of primitives and of references        */
     gc.c/.h               /* tricolour mark/sweep, roots, rooting scopes   */
@@ -67,6 +67,13 @@ owning module (§1.2), and `source/types.h` already exists one directory up.
 The library's include path contains only this directory, so that collision is
 impossible rather than merely avoided —
 [18_ObjectHandler_Build_Plan.md](18_ObjectHandler_Build_Plan.md) D3.
+
+The string module is `obj_string`, not `strings`, because that collision runs
+the other way: `strings.h` is a POSIX header that glibc's and newlib's
+`<string.h>` include in their default GNU modes, so a library file of that
+name on the `-I` path would shadow it. No include-path discipline prevents
+that; only the name does. It also moves the prefix off `str` + lowercase,
+which C11 §7.31.13 reserves for `<string.h>` — [18 D3](18_ObjectHandler_Build_Plan.md).
 
 `objects_types.h` and every module header must compile against `<stdint.h>`
 and `<string.h>` only. A CI job builds the directory on its own with
@@ -80,12 +87,16 @@ library-wide prefix: `oh_`, and the `vee_` before it, are both retired. The
 rule is Ruffus's and it is kept because it makes the owning `.c` file
 readable from the call site.
 
+`obj_handler_` and `obj_string_` are not a library prefix creeping back:
+`obj_handler` and `obj_string` are module names, and each prefix still names
+exactly one file. §1.1 says why the string module is not called `strings`.
+
 | Prefix | Module | Owns |
 |---|---|---|
 | `objects_` / `OBJECT_` | `objects.c` | object identity, `object_id_t`, spaces, handle table, resolution, generic create/clone/promote/pin, the write barrier |
 | `heap_` / `HEAP_` | `heap.c` | segments, payload allocation, free list, size-class recycler |
 | `stack_` / `STACK_` | `stack.c` | thread stack regions, frames, evaluation slots, the frame scratch arena |
-| `strings_` / `STRING_` | `strings.c` | `System.String` payloads, interning, string operations |
+| `obj_string_` / `OBJ_STRING_` | `obj_string.c` | `System.String` payloads, interning, string operations |
 | `value_` / `VALUE_` | `value.c` | boxing/unboxing, numeric conversion and comparison |
 | `array_` / `ARRAY_` | `array.c` | array payloads, element addressing, bulk copy |
 | `gc_` / `GC_` | `gc.c` | mark, sweep, roots, rooting scopes, collection trigger |
@@ -98,8 +109,8 @@ Two consequences worth stating, because the `oh_` draft got them wrong:
   block holds) and `STACK_K_*` (what an evaluation slot holds).
 - **Allocation is named after where the memory comes from**, not after what
   is built in it: `heap_alloc()` and `stack_scratch_alloc()` are the two
-  allocators; `objects_create()`, `array_create()`, `strings_create()` and
-  `value_box()` are the typed constructors that call them.
+  allocators; `objects_create()`, `array_create()`, `obj_string_create()`
+  and `value_box()` are the typed constructors that call them.
 
 ---
 
@@ -584,10 +595,10 @@ Both are enabled by registering a second space and choosing it in
 ### 5.6 String payloads — UTF-8
 
 ECMA-335 defines `System.String` as UTF-16, and the `#US` heap is UTF-16LE.
-This design stores string payloads as **UTF-8**, selected by `STRING_ENCODING`
-(default `UTF8`) and **the same on MCU and host**, for the reason in
-[11 §4.6](11_Memory_Model.md): a host build that stored strings differently
-would stop being a rehearsal for the device.
+This design stores string payloads as **UTF-8**, selected by
+`OBJ_STRING_ENCODING` (default `UTF8`) and **the same on MCU and host**, for
+the reason in [11 §4.6](11_Memory_Model.md): a host build that stored strings
+differently would stop being a rehearsal for the device.
 
 **Why.** Embedded literals are overwhelmingly ASCII, where UTF-8 halves every
 string body — on a 64 KB heap that is a heap-capacity decision, not a
@@ -614,8 +625,8 @@ outside U+0000–U+007F.
 The default is the error, deliberately: an ASCII-only program gets exact
 semantics at one byte per character, and a program that needs more has to say
 so. Nothing is silently wrong either way. Run-time strings follow the same
-rule — `strings_create` takes UTF-8, the `char`-level API decodes rather than
-indexes, and interning compares bytes.
+rule — `obj_string_create` takes UTF-8, the `char`-level API decodes rather
+than indexes, and interning compares bytes.
 
 ---
 
@@ -1049,15 +1060,15 @@ object_id_t      stack_scratch_alloc(stack_thread_t * t, uint16_t type,
                                      uint8_t kind, uint32_t bytes);
 /* push/pop/peek per slot kind are static inline in stack.h              */
 
-/* ---- array.h / strings.h / value.h : typed constructors -------------- */
+/* ---- array.h / obj_string.h / value.h : typed constructors ----------- */
 object_id_t array_create(uint16_t type, uint16_t elem_size, uint32_t count);
 uint32_t    array_length(object_id_t id);
 void *      array_element_ptr(object_id_t id, uint32_t index);
 
-object_id_t strings_create(const char * utf8, uint32_t len);   /* §5.6     */
-object_id_t strings_intern(uint16_t literal_index);
-object_id_t strings_concat(object_id_t a, object_id_t b);
-uint32_t    strings_length(object_id_t id);
+object_id_t obj_string_create(const char * utf8, uint32_t len); /* §5.6 */
+object_id_t obj_string_intern(uint16_t literal_index);
+object_id_t obj_string_concat(object_id_t a, object_id_t b);
+uint32_t    obj_string_length(object_id_t id);
 
 object_id_t value_box(uint16_t type, const void * src, uint32_t bytes);
 void        value_unbox(object_id_t id, void * dst, uint32_t bytes);
@@ -1149,7 +1160,7 @@ the field is debug-only.
 | From Ruffus | Verdict |
 |---|---|
 | ObjectHandler as a separable component with no VM includes | **kept and enforced by CI** |
-| One module per responsibility, prefix = module (`objects_`, `heap_`, `stack_`, `strings_`, `value_`, `array_`, `gc_`) | **kept** — §1.2 |
+| One module per responsibility, prefix = module (`objects_`, `heap_`, `stack_`, `obj_string_`, `value_`, `array_`, `gc_`) | **kept** — §1.2 |
 | Two-block object/payload split (`heap_header_t3.data`) | **kept**, promoted to a dense handle array |
 | Magic-threshold non-heap references (`CONST_OBJECT_ID`) | **generalised** to the space tag |
 | First-fit + coalescing allocator | **kept**; size-class recycling deferred — §6.3 |
@@ -1172,7 +1183,7 @@ the field is debug-only.
 
 | Was open | Now |
 |---|---|
-| Library naming | Prefix is the owning module; `oh_`/`vee_` retired — §1.2 |
+| Library naming | Prefix is the owning module; `oh_`/`vee_` retired — §1.2. The string module is `obj_string`, because `strings.h` would shadow the POSIX header — §1.1 |
 | 64 KB heap, id width | **An initial profile, not a contract.** Heap ids are already pure identities, so compaction and a wider heap are changes to `heap.c`/`objects_types.h` that no embedder sees — §2.3.1 |
 | Allocation API width | Every byte and element count is **32-bit** from the first commit, so lifting the cap is not an API break — §5.2, §8 |
 | Segment selection policy | **One collectable segment**, MCU and host alike; two candidate splits recorded — §5.5 |

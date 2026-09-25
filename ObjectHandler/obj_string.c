@@ -5,17 +5,17 @@
 
 ///////////////////////////////////////////////////////////////////////////
 
-float strings_atof( const char * str )
+float obj_string_atof( const char * str )
 {
 	return ( float )atof(str);
 }
 
-int32_t strings_atoi( const char * str, int radix )
+int32_t obj_string_atoi( const char * str, int radix )
 {
-	return ( int32_t )strings_atol( str, radix );
+	return ( int32_t )obj_string_atol( str, radix );
 }
 
-int64_t strings_atol( const char * str, int radix )
+int64_t obj_string_atol( const char * str, int radix )
 {
 	uint32_t len;
 	uint32_t cnt;
@@ -51,12 +51,12 @@ int64_t strings_atol( const char * str, int radix )
 	return ret;
 }
 
-void strings_itoa(char *str, int32_t val, uint32_t radix)
+void obj_string_itoa(char *str, int32_t val, uint32_t radix)
 {
-	strings_ltoa(str, (int64_t)val, radix);
+	obj_string_ltoa(str, (int64_t)val, radix);
 }
 
-void strings_ltoa(char *str, int64_t val, uint32_t radix) 
+void obj_string_ltoa(char *str, int64_t val, uint32_t radix) 
 {
 	int64_t m;
 	int64_t div;
@@ -100,7 +100,7 @@ void strings_ltoa(char *str, int64_t val, uint32_t radix)
 	*str++ = 0;
 }
 
-void strings_ftoa(char *str, float val) 
+void obj_string_ftoa(char *str, float val) 
 {
 	int32_t i;
 	char * sep;
@@ -112,7 +112,7 @@ void strings_ftoa(char *str, float val)
 	}
 
 	i = ( int32_t )val;
-	strings_itoa(str, i, 10);
+	obj_string_itoa(str, i, 10);
   
 	while (*str) str++; // to string end
   
@@ -120,7 +120,7 @@ void strings_ftoa(char *str, float val)
   
 	val+=1-i;
 	i= (uint32_t)val*1000000;
-	strings_itoa(str, i, 10);
+	obj_string_itoa(str, i, 10);
 	sep[0] ='.';
   
 	while (*str) str++; // to string end
@@ -129,7 +129,7 @@ void strings_ftoa(char *str, float val)
 	if (*str=='.') *str=0;
 }
 
-object_t strings_split( object_t object, const char * delimit )
+object_t obj_string_split( object_t object, const char * delimit )
 {
     char * str_temp;
     char * last_token;
@@ -142,10 +142,10 @@ object_t strings_split( object_t object, const char * delimit )
     
     counter = 0;
     
-    str_temp = strings_get_text_ptr( object );
+    str_temp = obj_string_get_text_ptr( object );
     
     // first need to count
-	while (strings_tokenizer(str_temp, ( const char ** )&out, &size, delimit, &last_token)) 
+	while (obj_string_tokenizer(str_temp, ( const char ** )&out, &size, delimit, &last_token)) 
 	{
         counter++;
 		str_temp = NULL;
@@ -154,14 +154,14 @@ object_t strings_split( object_t object, const char * delimit )
     // create array
     array_obj = array_create( counter, T_CLASS );
     
-    str_temp = strings_get_text_ptr( object );
+    str_temp = obj_string_get_text_ptr( object );
     counter = 0;
     
     // first need to count
-	while (strings_tokenizer(str_temp, ( const char ** )&out, &size, delimit, &last_token)) 
+	while (obj_string_tokenizer(str_temp, ( const char ** )&out, &size, delimit, &last_token)) 
 	{
-        element = strings_create_capacity( size + 1 );
-        str_ptr = strings_get_text_ptr( element );
+        element = obj_string_create_capacity( size + 1 );
+        str_ptr = obj_string_get_text_ptr( element );
         strncpy( str_ptr, out, size );
         str_ptr[size] = 0;
         
@@ -173,7 +173,7 @@ object_t strings_split( object_t object, const char * delimit )
     return array_obj;
 }
 
-bool_t strings_tokenizer(const char *s1, const char ** exit, int * size, const char *delimit, char ** lastToken)
+bool_t obj_string_tokenizer(const char *s1, const char ** exit, int * size, const char *delimit, char ** lastToken)
 {
     const char *tmp;
 
@@ -210,17 +210,17 @@ bool_t strings_tokenizer(const char *s1, const char ** exit, int * size, const c
     return FALSE;
 }
 
-void strings_destroy( object_t object )
+void obj_string_destroy( object_t object )
 {
 	object_delete( object );
 }
 
-object_t strings_create( const char * string )
+object_t obj_string_create( const char * string )
 {
-	return strings_create_index( string, 0, NEG_U32 );
+	return obj_string_create_index( string, 0, NEG_U32 );
 }
 
-object_t strings_create_index( const char * string, uint32_t start, uint32_t len )
+object_t obj_string_create_index( const char * string, uint32_t start, uint32_t len )
 {
 	uint32_t length = 0;
 	object_t object;
@@ -258,9 +258,9 @@ object_t strings_create_index( const char * string, uint32_t start, uint32_t len
 	return object;
 }
 
-int32_t strings_index_of( object_t object, const char * search )
+int32_t obj_string_index_of( object_t object, const char * search )
 {
-    char * obj_string = strings_get_text_ptr( object );
+    char * obj_string = obj_string_get_text_ptr( object );
     char * ret = strstr( obj_string, search );
     
     if( ret == NULL ) return -1;
@@ -268,7 +268,7 @@ int32_t strings_index_of( object_t object, const char * search )
     return ( int32_t )( ( uint8_t * )ret - ( uint8_t * )obj_string );
 }
 
-object_t strings_create_capacity( uint32_t length )
+object_t obj_string_create_capacity( uint32_t length )
 {
 	object_t object;
 	char * ptr_string;
@@ -284,7 +284,7 @@ object_t strings_create_capacity( uint32_t length )
 	return object;
 }
 
-uint32_t strings_get_capacity( object_t object )
+uint32_t obj_string_get_capacity( object_t object )
 {
 	uint32_t length;
 	char * ptr_string;
@@ -295,7 +295,7 @@ uint32_t strings_get_capacity( object_t object )
 	return length;
 }
 
-void strings_copy( object_t object, const char * new_string )
+void obj_string_copy( object_t object, const char * new_string )
 {
 	uint32_t new_size = 0;
 	char * text;
@@ -317,7 +317,7 @@ void strings_copy( object_t object, const char * new_string )
 	strcpy( text, new_string );
 }
 
-void strings_concat( object_t object, const char * add_text )
+void obj_string_concat( object_t object, const char * add_text )
 {
 	uint32_t new_size = 0;
 	char * text;
@@ -336,7 +336,7 @@ void strings_concat( object_t object, const char * add_text )
 	strcat( text, add_text );
 }
 
-int strings_compare( object_t object, const char * string )
+int obj_string_compare( object_t object, const char * string )
 {
 	char * text;
 
@@ -346,7 +346,7 @@ int strings_compare( object_t object, const char * string )
     return strcmp( text, string );
 }
 
-char strings_char_at( object_t object, uint32_t index )
+char obj_string_char_at( object_t object, uint32_t index )
 {
 	uint32_t size = 0;
 	char * text;
@@ -363,7 +363,7 @@ char strings_char_at( object_t object, uint32_t index )
     return text[ index ];
 }
 
-void strings_tolower( object_t object )
+void obj_string_tolower( object_t object )
 {
 	uint32_t size = 0;
 	uint32_t i;
@@ -380,7 +380,7 @@ void strings_tolower( object_t object )
 	}
 }
 
-void strings_toupper( object_t object )
+void obj_string_toupper( object_t object )
 {
 	uint32_t size = 0;
 	uint32_t i;
@@ -397,7 +397,7 @@ void strings_toupper( object_t object )
 	}
 }
 
-void strings_replace_char( object_t object, char replace_char, char new_char )
+void obj_string_replace_char( object_t object, char replace_char, char new_char )
 {
 	uint32_t size = 0;
 	uint32_t i;
@@ -414,7 +414,7 @@ void strings_replace_char( object_t object, char replace_char, char new_char )
 	}    
 }
 
-void strings_insert( object_t object, uint32_t position, const char * input, uint32_t start, uint32_t len )
+void obj_string_insert( object_t object, uint32_t position, const char * input, uint32_t start, uint32_t len )
 {
 	uint32_t input_size = 0;
 	uint32_t new_size = 0;
@@ -462,7 +462,7 @@ void strings_insert( object_t object, uint32_t position, const char * input, uin
 	heap_free( new_text );
 }
 
-object_t strings_get_substring( object_t object, uint32_t position, uint32_t len )
+object_t obj_string_get_substring( object_t object, uint32_t position, uint32_t len )
 {
 	uint32_t size = 0;
 	char * text;
@@ -483,8 +483,8 @@ object_t strings_get_substring( object_t object, uint32_t position, uint32_t len
 		return 0;
 	}
 
-	new_object = strings_create_capacity( len + 1 );
-	input = strings_get_text_ptr( new_object );
+	new_object = obj_string_create_capacity( len + 1 );
+	input = obj_string_get_text_ptr( new_object );
 
 	// copy string
 	strncpy( input, &text[position], len );
@@ -492,7 +492,7 @@ object_t strings_get_substring( object_t object, uint32_t position, uint32_t len
 	return new_object;
 }
 
-void strings_delete( object_t object, uint32_t position, uint32_t len )
+void obj_string_delete( object_t object, uint32_t position, uint32_t len )
 {
 	uint32_t size = 0;
 	char * text;
@@ -520,7 +520,7 @@ void strings_delete( object_t object, uint32_t position, uint32_t len )
 	object_data_resize( object, size );
 }
 
-object_t strings_duplicate( object_t object )
+object_t obj_string_duplicate( object_t object )
 {
 	char * text;
 	object_t new_string;
@@ -529,12 +529,12 @@ object_t strings_duplicate( object_t object )
 	text = ( char * )object_get_ptr( object );
 
 	// create new string
-	new_string = strings_create( text );
+	new_string = obj_string_create( text );
 
 	return new_string;
 }
 
-char * strings_get_text_ptr( object_t object )
+char * obj_string_get_text_ptr( object_t object )
 {
 	return ( char * )object_get_ptr( object );
 }

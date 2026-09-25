@@ -347,23 +347,23 @@ char * value_to_string( object_t object )
 		case T_BYTE:
 		case T_SHORT:
 		case T_INT:
-			strings_itoa( _to_string_temp, *( ( int32_t * )obj_ptr ), RADIX_DECIMAL );
+			obj_string_itoa( _to_string_temp, *( ( int32_t * )obj_ptr ), RADIX_DECIMAL );
 			break;
 
 		case T_LONG:
-			strings_ltoa( _to_string_temp, *( ( int64_t * )obj_ptr ), RADIX_DECIMAL );
+			obj_string_ltoa( _to_string_temp, *( ( int64_t * )obj_ptr ), RADIX_DECIMAL );
 			break;
 
 		case T_FLOAT:
-			strings_ftoa( _to_string_temp, *( ( float * )obj_ptr ) );
+			obj_string_ftoa( _to_string_temp, *( ( float * )obj_ptr ) );
 			break;
 
 		case T_DOUBLE:
-			strings_ftoa( _to_string_temp, ( float )( *( ( double * )obj_ptr ) ) );
+			obj_string_ftoa( _to_string_temp, ( float )( *( ( double * )obj_ptr ) ) );
 			break;
 
 		case (T_ARRAY + T_CHAR):
-			return strings_get_text_ptr( object );
+			return obj_string_get_text_ptr( object );
 	}
 
 	return _to_string_temp;

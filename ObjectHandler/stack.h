@@ -153,7 +153,7 @@ static INLINE void stack_push( object_t object )
 
 static INLINE void stack_push_string( char * value )
 {
-	stack_push( strings_create( value ) );
+	stack_push( obj_string_create( value ) );
 }
 
 static INLINE void stack_push_boolean( bool_t value )

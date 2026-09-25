@@ -265,7 +265,7 @@ Detailed background lives in
 The skeletons in [objects.h](../source/framework/objects.h) are superseded by
 **ObjectHandler**, a standalone library that owns objects, the heap, the
 per-thread stack and the collector, decomposed one module per responsibility
-— `objects_`, `heap_`, `stack_`, `strings_`, `value_`, `array_`, `gc_`. Full
+— `objects_`, `heap_`, `stack_`, `obj_string_`, `value_`, `array_`, `gc_`. Full
 specification in [14_ObjectHandler.md](14_ObjectHandler.md); the policy that
 surrounds it is in [11_Memory_Model.md](11_Memory_Model.md). Summary here.
 
