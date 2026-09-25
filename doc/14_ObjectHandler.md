@@ -100,7 +100,7 @@ exactly one file. §1.1 says why the string module is not called `strings`.
 | `value_` / `VALUE_` | `value.c` | boxing/unboxing, numeric conversion and comparison |
 | `array_` / `ARRAY_` | `array.c` | array payloads, element addressing, bulk copy |
 | `gc_` / `GC_` | `gc.c` | mark, sweep, roots, rooting scopes, collection trigger |
-| `obj_handler_` | `obj_handler.h` | library lifecycle only: `init`, `shutdown`, config and host structs |
+| `obj_handler_` / `OBJ_HANDLER_` | `obj_handler.h` | library lifecycle only: `init`, `shutdown`, config and host structs, init status codes |
 
 Two consequences worth stating, because the `oh_` draft got them wrong:
 
@@ -1001,16 +1001,15 @@ typedef struct {
        is an object_id_t. Return NULL if the type contains no ids.      */
     const uint8_t * (*type_refmap)(uint16_t type, uint32_t * words);
 
-    /* Element count and element reference-ness for OBJECT_K_ARRAY.     */
-    void (*array_shape)(object_id_t id, uint32_t * count,
-                        uint32_t * elem_size, int * elem_is_ref);
-
     void (*on_oom)(void);
     void (*on_corrupt)(const char * where, object_id_t id);
 } obj_handler_host_t;
 ```
 
-Three callbacks. Everything else the collector needs is in the handle.
+Three callbacks, all required (§9.2). Everything else the collector needs is
+in the handle or, for an array, in its payload header
+([18 §7](18_ObjectHandler_Build_Plan.md)), which is why there is no
+`array_shape` callback.
 
 ---
 
@@ -1021,9 +1020,9 @@ One header per module; `obj_handler.h` includes them all, exactly as Ruffus's
 
 ```c
 /* ---- obj_handler.h : library lifecycle ------------------------------ */
-int  obj_handler_init(const obj_handler_config_t * cfg,
-                      const obj_handler_host_t   * host);
-void obj_handler_shutdown(void);
+obj_handler_status_t obj_handler_init(const obj_handler_config_t * cfg,
+                                      const obj_handler_host_t   * host);
+void                 obj_handler_shutdown(void);
 
 /* ---- objects.h : identity, resolution, lifetime --------------------- */
 static inline void * objects_ptr(object_id_t id);
@@ -1040,7 +1039,7 @@ static inline void objects_write_ref(object_id_t * slot, object_id_t value);
 
 void *      objects_pin(object_id_t id);
 void        objects_unpin(object_id_t id);
-int         objects_space_register(uint16_t tag, const object_space_t * desc);
+void        objects_space_register(uint16_t tag, const object_space_t * desc);
 
 /* ---- heap.h : the payload allocator --------------------------------- */
 object_id_t heap_alloc(uint16_t space, uint16_t type,
@@ -1123,7 +1122,7 @@ typedef struct {
 The size fields are 32-bit for the reason in §2.3.1 — the struct is the
 embedder's compile-time contract, and it should not be the thing that breaks
 when the cap is lifted. v1 validates each against its 16-bit profile limit in
-`obj_handler_init` and refuses anything larger.
+`obj_handler_init` and refuses anything larger with a status code (§9.2).
 
 An MCU build declares these as `static` arrays and performs no dynamic
 allocation before `main`. A host build `mmap`s the image and `malloc`s the
@@ -1152,6 +1151,50 @@ A **debug** build's handle is 12 bytes rather than 8 (§3.2), so the same
 `handle_count` costs half as much again — 16 KB becomes 24 KB. That is the
 price of the generation check on a device debug build, and it is the reason
 the field is debug-only.
+
+### 9.2 Initialisation — `obj_handler_status_t`
+
+`obj_handler_init` is the only function that returns a status. Every other
+failure follows [18 D1](18_ObjectHandler_Build_Plan.md): allocation returns
+`OBJECT_NULL`, `on_oom` does not return, and an embedder bug goes to
+`on_corrupt`. Init is the exception because it runs before there is an
+`on_corrupt` to trust — a NULL `on_corrupt` is one of the things it rejects.
+
+**Rule: until `obj_handler_init` returns `OBJ_HANDLER_OK`, errors are
+returned; after that, an embedder bug goes to `on_corrupt`.** This is also why
+`objects_space_register` returns `void` (§8).
+
+```c
+typedef enum {
+    OBJ_HANDLER_OK = 0,
+    OBJ_HANDLER_E_ARG_NULL,       /* cfg or host is NULL                          */
+    OBJ_HANDLER_E_ALREADY_INIT,   /* already initialised; shut down first         */
+    OBJ_HANDLER_E_SEGMENTS,       /* segments == 0 or > HEAP_SEGMENTS             */
+    OBJ_HANDLER_E_PAYLOAD_BASE,   /* payload NULL or not 8-byte aligned           */
+    OBJ_HANDLER_E_PAYLOAD_SIZE,   /* < 16, > HEAP_MAX_PAYLOAD, or not a multiple of 8 */
+    OBJ_HANDLER_E_HANDLES,        /* handles NULL, or handle_count < 2 or > 65536 */
+    OBJ_HANDLER_E_WORKLIST,       /* worklist NULL or worklist_len == 0           */
+    OBJ_HANDLER_E_HOST_CALLBACK,  /* type_refmap, on_oom or on_corrupt is NULL    */
+} obj_handler_status_t;
+```
+
+| Property | Rule |
+|---|---|
+| Granularity | one code per thing the embedder has to fix; its comment says what |
+| Order | checks run in enum order and the first failure is returned, so a test can trip exactly one check and assert its code |
+| Atomicity | every check runs before any region or library state is written; a failed init leaves the library uninitialised, and init may simply be called again |
+| Stability | `OBJ_HANDLER_OK` is 0; codes are appended, never renumbered |
+| Growth | a code arrives with the slice that first reads its field — `E_GC_PCT`, `E_STATICS` and `E_CONST` with OH-3 (D7), `E_STACK` with OH-4 — so no code exists without a check and a test |
+
+The limits behind the codes:
+
+- **`HEAP_MAX_PAYLOAD` is 65536** — the "≤ 64 KB" of §5.1 and §9. 65536 does
+  not fit in 16 bits, so the segment's bump top and `used` count are 32-bit
+  inside `heap.c`; stored offsets and sizes stay 16-bit, because neither can
+  exceed 65528.
+- **16 bytes minimum** — the reserved 8-byte sentinel at offset 0
+  ([18 §4](18_ObjectHandler_Build_Plan.md)) plus one 8-byte block.
+- **`handle_count` at most 65536** — a 16-bit index, index 0 reserved (§2.1).
 
 ---
 
@@ -1197,6 +1240,7 @@ the field is debug-only.
 | Collection trigger | **Both**, and configurable: 75 % occupancy requested as a flag, *plus* an immediate forced collect-and-retry on allocation failure — §7.3 |
 | Debug object identity | **A generation counter in the id, debug builds only**: 8-bit space / 8-bit generation / 16-bit index, same 32-bit width, so a stale id is rejected at its first use instead of aliasing a recycled handle — §2.1, §3.2, §3.4 |
 | String representation | **UTF-8**, identical on MCU and host. `cli_pack` converts ASCII literals and **errors** on any code point ≥ U+0080 or any unpaired surrogate, unless `--allow-non-ascii` is given — §5.6 |
+| Init failure reporting | **`obj_handler_status_t`**, returned by `obj_handler_init` only — one code per thing the embedder has to fix, appended per slice. Before init errors are returned; after it, embedder bugs go to `on_corrupt` — §9.2 |
 
 **Still open:**
 

@@ -80,15 +80,20 @@ runnable inside a misbehaving Ruffus (§2, L3).
 
 ### D1 — Error and failure model
 
-Every function currently has an unspecified failure path. Proposal:
+Every function had an unspecified failure path. Decision:
 
 | Case | Behaviour |
 |---|---|
 | Allocation cannot be satisfied | return `OBJECT_NULL`; the caller checks |
 | `on_oom` | **must not return** — it aborts, `longjmp`s, or resets the board. The library has no way to continue and must not pretend it has |
-| `obj_handler_init` | returns `obj_handler_status_t`, one code per rejected precondition (not a bare `int`) |
+| `obj_handler_init` | returns `obj_handler_status_t` — one code per thing the embedder has to fix, listed in 14 §9.2 (not a bare `int`) |
 | Detected corruption | `on_corrupt(where, id)` then, in debug, abort; in release, return a safe value and keep going |
 | Bad argument from the embedder (null id, out-of-range index) | `on_corrupt` — it is a bug in the embedder, not a run-time condition |
+
+**The boundary:** until `obj_handler_init` returns `OBJ_HANDLER_OK`, errors
+are returned; after that, an embedder bug goes to `on_corrupt`. Init cannot
+report through `on_corrupt`, because a NULL `on_corrupt` is one of the things
+it rejects. The same rule makes `objects_space_register` `void` (14 §8).
 
 `obj_handler_status_t` lives in `obj_handler.h` because 14 §1.2 gives the
 lifecycle module the init/shutdown/config/host vocabulary. It also gives the
@@ -379,9 +384,10 @@ initialises from a caller-supplied config and refuses a malformed one.
    three resolution paths (handled / flat / indirect→`on_corrupt` in v1),
    `objects_type_of` / `size_of` / `kind_of`, and `objects_write_ref` +
    `objects_escape` as the identity pair required by 14 §6.0.
-4. `obj_handler_init` validation, one `obj_handler_status_t` per branch:
-   segment count, payload size against the cap, payload base 8-aligned,
-   `handle_count ≥ 2`, worklist non-null, every host callback non-null.
+4. `obj_handler_init` validation, one `obj_handler_status_t` per branch, in
+   enum order (14 §9.2): `E_ARG_NULL`, `E_ALREADY_INIT`, `E_SEGMENTS`,
+   `E_PAYLOAD_BASE`, `E_PAYLOAD_SIZE`, `E_HANDLES`, `E_WORKLIST`,
+   `E_HOST_CALLBACK`. Nothing is written until every check has passed.
 5. CMake: `objecthandler` static library with an isolated include path (D3);
    the 14 §1.1 standalone job; CTest wiring for the three builds.
 
@@ -394,7 +400,8 @@ initialises from a caller-supplied config and refuses a malformed one.
 - an out-of-range index, an unregistered space and a not-`INUSE` handle each
   call `on_corrupt` exactly once;
 - every `obj_handler_init` precondition has a test that trips it and gets its
-  own status code back;
+  own status code back, after which a valid init still succeeds — the proof
+  that a failed init wrote nothing;
 - the standalone `-Wall -Wextra -Werror -pedantic` build passes with no
   include path into `source/`.
 
@@ -583,7 +590,7 @@ typedef struct {            /* first 8 bytes of an OBJECT_K_ARRAY payload */
    `object_handle_t.offset` is (14 §2.3), and widen with the payload.
 
    `OBJECT_H_HASREFS` is set from the element type at creation.
-   **This deletes `array_shape` from the host struct** (14 §7.5), leaving two
+   **This deletes `array_shape` from the host struct** (14 §7.5), leaving three
    callbacks and one source of truth for an array's shape.
 2. `obj_string.c` — UTF-8 bodies per 14 §5.6; `obj_string_create`
    *validates* its input and rejects overlong encodings, truncated sequences
@@ -680,6 +687,7 @@ and OH-4, not deferred.
 | Array header | **Kept, and widened to 8 bytes** so `int64`/`double` elements stay naturally aligned; deletes `array_shape` from the host struct — §7 |
 | Heap ids | Confirmed: **handle-table indices from v1**, never payload offsets, with no later migration — D2 and 14 §3.2 |
 | Debug object identity | **Approved: 8-bit space / 8-bit generation / 16-bit index in debug builds**, release unchanged at 16/16. Both mechanisms adopted — the generation check and the free-handle quarantine. Folded into the contract at 14 §2.1, §3.2, §3.4 and §11 |
+| Init status (2026-09-25) | **`obj_handler_status_t`, returned by `obj_handler_init` only**: eight codes in OH-1, one per thing the embedder has to fix, appended per slice. Errors are returned before init and go to `on_corrupt` after it, so `objects_space_register` is `void`. `HEAP_MAX_PAYLOAD` is 65536 — D1, 14 §9.2 |
 
 **Nothing remains open.** D5, D6, D7 and D9 (§9) are scheduled decisions, not
 unresolved ones: each is taken at the start of the slice that consumes it,
