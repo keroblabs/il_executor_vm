@@ -606,13 +606,14 @@ resolved before the call is stale. Re-resolve from the object id.
 
 ## 9. What `cli_pack` must emit
 
-The collector's precision rests entirely on three bitmaps. Producing them is
+The collector's precision rests entirely on four bitmaps. Producing them is
 the emitter's whole GC contribution; the data is already available from the
 existing signature decoder and layout pass.
 
 | Emitted data | Granularity | Consumer | Derived from |
 |---|---|---|---|
 | **Instance reference bitmap** | per type | marking an object's fields | field layout pass; bit *i* set if the word at offset *i×4* is an `object_id_t` |
+| **Array element bitmap** | per array type | marking array elements | the element's layout: bit 0 alone for a reference element, the struct's bitmap for a struct element, none for a primitive — [14 §5.7](14_ObjectHandler.md) |
 | **Statics reference bitmap** | whole slab | root scan | §3.1 layout |
 | **Args/locals reference bitmaps** | per method | frame root scan | method signature and `LOCAL_SIG`, already decoded by [signature_parser.c](../source/methods/signature_parser.c) |
 | Statics slab size + alignment | image | startup sizing | §3.1 |
@@ -621,7 +622,7 @@ existing signature decoder and layout pass.
 | Handle-table capacity | image | startup sizing | `payload_size / 32` — [14 §9.1](14_ObjectHandler.md) |
 | Heap payload minimum + GC thresholds | image | startup sizing | board manifest overrides — §4.5, [14 §7.3](14_ObjectHandler.md) |
 | Literal pool + count | image | interning table sizing | §3.2 |
-| Per-type instance size and alignment | per type | `heap_alloc` | layout pass |
+| Per-type instance size and alignment; element size for array types | per type | `heap_alloc`, `array_create` | layout pass |
 | Escape classification per `box` site | per instruction | scratch vs heap allocation | [15 §4](15_Pack_Time_IL_Transforms.md) |
 
 The evaluation stack needs **nothing** — it describes itself through

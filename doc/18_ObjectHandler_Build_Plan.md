@@ -222,7 +222,7 @@ The full set:
 
 | File | Holds | Prefix it exports |
 |---|---|---|
-| `objects_types.h` | `object_id_t`, id macros, `object_handle_t`, `object_space_t`, `object_byref_t`, `OBJECT_H_*`, `OBJECT_K_*` | `OBJECT_` / `objects_` |
+| `objects_types.h` | `object_id_t`, id macros, `object_handle_t`, `object_space_t`, `object_byref_t`, `OBJECT_H_*`, `OBJECT_K_*`, `array_header_t` (read by `gc.c` — 14 §5.7) | `OBJECT_` / `objects_` |
 | `obj_handler_config.h` | the single configuration (§0.2) and the debug switches | `OBJECT_` / `HEAP_` / `STACK_` per owner |
 | `obj_handler.h` | umbrella; `obj_handler_init/shutdown`, `obj_handler_config_t`, `obj_handler_host_t`, `obj_handler_status_t` | `obj_handler_` |
 | `heap.h`, `objects.h`, `gc.h`, `stack.h`, `array.h`, `obj_string.h`, `value.h` | one module each | their own |
@@ -375,7 +375,8 @@ initialises from a caller-supplied config and refuses a malformed one.
 
 1. `objects_types.h` — `object_id_t`, `OBJECT_NULL`, the id macros in **both**
    splits behind `OBJECT_DEBUG_REFS`, `object_handle_t`, `object_byref_t`,
-   `OBJECT_H_*`, `OBJECT_K_*`, `object_space_t`.
+   `OBJECT_H_*`, `OBJECT_K_*`, `object_space_t`, and `array_header_t`
+   (14 §5.7).
 2. `obj_handler_config.h` — the single configuration of §0.2:
    `OBJECT_SPACE_COUNT`, `HEAP_SEGMENTS`, `OBJ_STRING_ENCODING`, worklist
    length, scope depth, and the four debug switches with their debug/release
@@ -494,8 +495,9 @@ D6 `gc_poll` and the safepoint contract, D7 statics slab and literal pool.
 1. Rooting scopes: `gc_scope_push/pop`, `gc_root_add(object_id_t *)`, a
    fixed-depth stack sized from the config. Without this nothing outside a
    stack slot can survive an allocation — it is the first thing written.
-2. Mark: bounded worklist of handle indices; scan object payloads by refmap;
-   the overflow flag and its rescan loop (14 §7.2).
+2. Mark: bounded worklist of handle indices; scan object payloads by refmap,
+   and array payloads by the element refmap `count` times (14 §5.7); the
+   overflow flag and its rescan loop (14 §7.2).
 3. Sweep: linear handle walk, release unmarked blocks through
    `heap_release`, clear marks, bump the generation (D2), refill stats.
 4. Triggers (14 §7.3): threshold → `gc_request()` flag; `gc_poll()` performs
@@ -514,6 +516,9 @@ D6 `gc_poll` and the safepoint contract, D7 statics slab and literal pool.
 - a tiny worklist plus a deep graph forces the overflow path and must produce
   the identical live set to a large worklist;
 - an unreferenced cycle is fully collected;
+- arrays built directly with `heap_alloc` and an `array_header_t`, before
+  `array.c` exists: a reference array and a struct array whose elements hold
+  ids keep their referents alive, and a `byte[]` is never scanned;
 - an object reachable only through a scope survives; after the scope pops, it
   is collected;
 - the threshold sets the flag and **no collection happens until `gc_poll`**;
@@ -565,33 +570,27 @@ equal through `value_compare` in OH-5.
 
 **Files:** `array.c/.h`, `obj_string.c/.h`, `value.c/.h`.
 
-**Consumes:** D9 string layout and interning (§9). The array payload header is
-**decided** — see below.
+**Consumes:** D9 string layout and interning (§9). The array layout is
+**decided** in 14 §5.7.
 
 **Work:**
 
-1. `array.c` — an **8-byte** payload header, not 4:
+1. `array.c` — the API of 14 §8 over the layout of 14 §5.7, replacing
+   Ruffus's `arrays_type.c`:
+   - `array_create` rejects a `count × elem_size` overflow before allocating,
+     sets `OBJECT_H_HASREFS` when the type's refmap is non-NULL, and in debug
+     checks that the refmap covers exactly `elem_size` bytes;
+   - `array_range_ptr` is the one range check, done in elements;
+     `array_element_ptr` is a range of one, and `array_element_byref` gives
+     `ldelema` the same check as `{id, offset}`;
+   - `array_copy` is overlap-safe (`memmove`), same `elem_size` only, and every
+     copied id goes through `objects_write_ref`;
+   - `array_clear` zeroes a range; storing `OBJECT_NULL` needs no barrier.
 
-```c
-typedef struct {            /* first 8 bytes of an OBJECT_K_ARRAY payload */
-    uint16_t count;
-    uint16_t elem_size;
-    uint32_t _reserved;     /* keeps elements 8-byte aligned — see below   */
-} array_header_t;
-```
-
-   The reserved word is not padding for its own sake. A 4-byte header would
-   start the elements at offset 4, which misaligns every `int64` and `double`
-   element — a fault on some ARM configurations and a slow path on the rest,
-   and a bug that would surface only in whichever test first used a `long[]`.
-   Eight bytes keeps the block 8-aligned *and* the elements 8-aligned, and
-   leaves room for the rank or flags a multi-dimensional array would need
-   later. `count` and `elem_size` are 16-bit for the same reason
-   `object_handle_t.offset` is (14 §2.3), and widen with the payload.
-
-   `OBJECT_H_HASREFS` is set from the element type at creation.
-   **This deletes `array_shape` from the host struct** (14 §7.5), leaving three
-   callbacks and one source of truth for an array's shape.
+   The 8-byte header lives in `objects_types.h` from OH-1, so the collector
+   reads it in OH-3. **This deletes `array_shape` from the host struct**
+   (14 §7.5), leaving three callbacks and one source of truth for an array's
+   shape.
 2. `obj_string.c` — UTF-8 bodies per 14 §5.6; `obj_string_create`
    *validates* its input and rejects overlong encodings, truncated sequences
    and surrogates; the intern table comes from the config.
@@ -599,12 +598,17 @@ typedef struct {            /* first 8 bytes of an OBJECT_K_ARRAY payload */
    over slots, reimplementing Ruffus's mixed-type promotion table with no
    allocation (14 §6.6).
 
-**Done when:** element addressing bounds tests; **an `int64[]` and a `double[]`
-round-trip with an alignment assertion on every element address**; a reference
-array is traced and keeps its elements alive; a UTF-8 validation table (valid /
-overlong / truncated / surrogate / empty) with an expected verdict per row;
-box→unbox round-trip for every primitive kind; a `value_compare` matrix over
-every slot-kind pair.
+**Done when:** range tests, including index `0xFFFFFFFF`, a wrapping
+`index + count` and a `count × elem_size` overflow at creation; zero-length
+arrays; an overlapping `array_copy` in both directions; an element byref that
+resolves to the same address as `array_element_ptr`, and has an `OBJECT_NULL`
+id for an index out of range; an array made by `array_create` traced exactly
+as OH-3's hand-built ones, and a `byte[]` created with `OBJECT_H_HASREFS`
+clear; **an `int64[]` and a `double[]` round-trip with an alignment assertion
+on every element address**; a UTF-8 validation table (valid / overlong /
+truncated / surrogate / empty) with an expected verdict per row; box→unbox
+round-trip for every primitive kind; a `value_compare` matrix over every
+slot-kind pair.
 
 ---
 
@@ -644,8 +648,8 @@ without the code in front of you.
 | D7 | Statics slab and literal pool layout | OH-3 | includes the `OBJECT_SPACE_CONST` contradiction in 14 §3.1 vs §3.3 — the catalogue says "literal-pool index", resolution says byte offset. One of the two is wrong |
 | D9 | String layout and interning | OH-5 | length source, intern table ownership |
 
-D8, the array payload header, was on this list and is now resolved in §7: an
-8-byte header, chosen in review.
+D8, the array payload header, was on this list and is now resolved in 14 §5.7:
+an 8-byte header, chosen in review.
 
 ---
 
@@ -684,10 +688,11 @@ and OH-4, not deferred.
 | Free-list terminator | **Reserved 8-byte sentinel at payload offset 0**; `next == 0` becomes unambiguous and `offset == 0` becomes a usable "no payload" marker — §4 |
 | `heap_release` | Kept, declared in `heap.h`, **called by the GC sweep** in production and directly by tests; absent from the umbrella header because an embedder never frees — §4 |
 | OH-2 before OH-3 | **Settled**, no longer open: the allocator is fully exercisable without a collector, and `heap_release` is a real API with a real caller rather than a test hook |
-| Array header | **Kept, and widened to 8 bytes** so `int64`/`double` elements stay naturally aligned; deletes `array_shape` from the host struct — §7 |
+| Array header | **Kept, and widened to 8 bytes** so `int64`/`double` elements stay naturally aligned; deletes `array_shape` from the host struct — now defined in 14 §5.7 |
 | Heap ids | Confirmed: **handle-table indices from v1**, never payload offsets, with no later migration — D2 and 14 §3.2 |
 | Debug object identity | **Approved: 8-bit space / 8-bit generation / 16-bit index in debug builds**, release unchanged at 16/16. Both mechanisms adopted — the generation check and the free-handle quarantine. Folded into the contract at 14 §2.1, §3.2, §3.4 and §11 |
 | Init status (2026-09-25) | **`obj_handler_status_t`, returned by `obj_handler_init` only**: eight codes in OH-1, one per thing the embedder has to fix, appended per slice. Errors are returned before init and go to `on_corrupt` after it, so `objects_space_register` is `void`. `HEAP_MAX_PAYLOAD` is 65536 — D1, 14 §9.2 |
+| Array model (2026-09-25) | **Kept, and cut back to what a CIL array is**: one-dimensional, inline elements, fixed length. The type's refmap describes one element; `array_range_ptr` is the only range check; the header moves to `objects_types.h`. Ruffus's list operations are dropped — 14 §5.7 |
 
 **Nothing remains open.** D5, D6, D7 and D9 (§9) are scheduled decisions, not
 unresolved ones: each is taken at the start of the slice that consumes it,

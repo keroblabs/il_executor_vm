@@ -139,6 +139,7 @@ object_t obj_string_split( object_t object, const char * delimit )
     int counter;
     object_t array_obj;
     object_t element;
+    object_t * slot;
     
     counter = 0;
     
@@ -153,6 +154,7 @@ object_t obj_string_split( object_t object, const char * delimit )
     
     // create array
     array_obj = array_create( counter, T_CLASS );
+    if( array_obj == 0 ) return 0;
     
     str_temp = obj_string_get_text_ptr( object );
     counter = 0;
@@ -165,7 +167,8 @@ object_t obj_string_split( object_t object, const char * delimit )
         strncpy( str_ptr, out, size );
         str_ptr[size] = 0;
         
-        array_copy( array_obj, counter, &element, 1 );
+        slot = ( object_t * )array_element_ptr( array_obj, counter );
+        if( slot != NULL ) *slot = element;
         counter++;
 		str_temp = NULL;
 	}       

@@ -58,7 +58,7 @@ source/objecthandler/
     stack.c/.h            /* thread stacks, frames, slots, scratch arena   */
     obj_string.c/.h       /* string objects and their operations          */
     value.c/.h            /* boxing, unboxing, numeric conversion, compare */
-    array.c/.h            /* arrays of primitives and of references        */
+    array.c/.h            /* one-dimensional arrays of inline elements     */
     gc.c/.h               /* tricolour mark/sweep, roots, rooting scopes   */
 ```
 
@@ -98,7 +98,7 @@ exactly one file. §1.1 says why the string module is not called `strings`.
 | `stack_` / `STACK_` | `stack.c` | thread stack regions, frames, evaluation slots, the frame scratch arena |
 | `obj_string_` / `OBJ_STRING_` | `obj_string.c` | `System.String` payloads, interning, string operations |
 | `value_` / `VALUE_` | `value.c` | boxing/unboxing, numeric conversion and comparison |
-| `array_` / `ARRAY_` | `array.c` | array payloads, element addressing, bulk copy |
+| `array_` / `ARRAY_` | `array.c` | array payloads (§5.7), the one range check, bulk copy and clear |
 | `gc_` / `GC_` | `gc.c` | mark, sweep, roots, rooting scopes, collection trigger |
 | `obj_handler_` / `OBJ_HANDLER_` | `obj_handler.h` | library lifecycle only: `init`, `shutdown`, config and host structs, init status codes |
 
@@ -628,6 +628,97 @@ so. Nothing is silently wrong either way. Run-time strings follow the same
 rule — `obj_string_create` takes UTF-8, the `char`-level API decodes rather
 than indexes, and interning compares bytes.
 
+### 5.7 Array payloads — one-dimensional, inline elements
+
+An array is an ordinary object with a known payload layout: an 8-byte header,
+then `count` elements stored inline. It is one-dimensional and zero-based,
+and its length never changes.
+
+```c
+typedef struct {            /* first 8 bytes of an OBJECT_K_ARRAY payload */
+    uint16_t count;
+    uint16_t elem_size;
+    uint32_t _reserved;     /* keeps elements 8-byte aligned               */
+} array_header_t;
+```
+
+The header is declared in `objects_types.h`, not `array.h`, because the
+collector reads it and `gc.c` is written before `array.c`
+([18 §5](18_ObjectHandler_Build_Plan.md)). It is 8 bytes rather than 4 because
+a 4-byte header would misalign every `int64` and `double` element, which
+faults on some ARM configurations. `count` and `elem_size` are 16-bit for the
+reason `object_handle_t.offset` is (§2.3), and widen with it.
+
+**Rule: for an `OBJECT_K_ARRAY`, `type_refmap(type)` describes one element,
+and the collector applies it `count` times.** The handle's `type` is the
+embedder's id for the *array* type, not the element type — the element type's
+refmap would describe a `String` object, not a reference to one.
+
+| Element | Example | `elem_size` | Refmap for the array type | Collector |
+|---|---|---|---|---|
+| primitive | `byte[]`, `int[]`, `double[]` | 1–8 | NULL, so `OBJECT_H_HASREFS` is clear | never scans it; contiguous, so it can be pinned for I/O |
+| reference | `object[]`, `string[]`, `int[][]` | 4 | bit 0 alone | scans every element as an id |
+| struct | `Point[]`, a `Dictionary`'s `Entry[]` | the struct's size | the struct's refmap | scans those words in each element |
+
+That rule is why there is no `array_shape` callback (§7.5) and no "elements
+are references" flag. It puts two obligations on the embedder: a non-NULL
+element refmap covers exactly `elem_size` bytes (a debug build checks this at
+creation), and every id inside an element is 4-byte aligned, because refmaps
+work in whole words.
+
+**Not an array of ids only.** That would box every `byte[]` and `int[]`
+element: `new byte[1024]` would cost about 20 KB and 1,025 handles — half the
+default table (§9.1) — instead of about 1 KB and one handle, and no buffer
+could reach a peripheral as contiguous memory ([11 §8.4](11_Memory_Model.md)).
+
+**Out of scope, deliberately:**
+
+- **Resizing.** CIL arrays have a fixed length; `List<T>` grows in managed
+  code by allocating a new array. Ruffus's in-place `array_insert` and
+  `array_delete` are not carried over.
+- **Rank above 1.** `int[,]` is an embedder construct — a small object holding
+  the bounds, plus one one-dimensional array. The reserved header word stays
+  reserved.
+- **Element conversion.** `array_copy` moves bytes between arrays of the same
+  `elem_size`; a widening `Array.Copy` is a loop in the embedder.
+
+**Element access.** One function returns the address of any element, whatever
+its type. CIL has a dozen `ldelem`/`stelem` forms plus structs of any size, and
+sign extension and promotion (§III.1.5) are the interpreter's rules, not the
+library's (§1) — so the library hands out an address and the interpreter does
+the typed load or store:
+
+| CIL | Interpreter | ObjectHandler |
+|---|---|---|
+| `ldlen` | push the length | `array_length` |
+| `ldelem.*` | read through the pointer, then promote | `array_element_ptr` |
+| `stelem.*` of a primitive | narrow, then write through the pointer | `array_element_ptr` |
+| `stelem.ref` | check the element type, then store through the barrier | `array_element_ptr`, then `objects_write_ref` |
+| `ldelem` / `stelem` of a struct | copy `elem_size` bytes | `array_element_ptr` |
+| `ldelema` | push a byref slot | `array_element_byref` |
+| a native taking a buffer | pin, then use the range | `array_range_ptr` |
+
+A pointer from `array_element_ptr` is valid until the next safepoint, like any
+resolved pointer ([11 §4.3](11_Memory_Model.md)). `ldelema` is the one case
+where the address must outlive that, because it sits in a stack slot, so it
+gets an `object_byref_t` instead — the array's id and the element's offset —
+which survives compaction (§4). A struct copied into an element carries its
+ids with it; §11 records what that means for the barrier.
+
+**The range rule.** The range check lives in `array_range_ptr`, and
+`array_element_ptr` and `array_element_byref` go through it. They are the only
+functions that treat a bad index as the *program's* error: they return NULL,
+or a byref whose `id` is `OBJECT_NULL`, and the interpreter throws
+`IndexOutOfRangeException`. The check compares in elements, so no index or
+count can wrap past it. Anything else passed in wrong — a bad range to
+`array_copy` or `array_clear`, an id that is not an array, `OBJECT_NULL` —
+means the embedder skipped a check, and goes to `on_corrupt` (§9.2).
+
+An array whose bytes live in the image, such as a `FieldRVA` initialiser
+([15 §5.1](15_Pack_Time_IL_Transforms.md)), uses the same layout; how its type
+and kind are found without a handle is part of D7
+([18 §9](18_ObjectHandler_Build_Plan.md)).
+
 ---
 
 ## 6. The stack, and the allocation question
@@ -998,7 +1089,8 @@ embedder tells it:
 ```c
 typedef struct {
     /* Reference bitmap for a type: bit i set => word i of the payload
-       is an object_id_t. Return NULL if the type contains no ids.      */
+       is an object_id_t. Return NULL if the type contains no ids.
+       For an array type, the bitmap of one element (§5.7).           */
     const uint8_t * (*type_refmap)(uint16_t type, uint32_t * words);
 
     void (*on_oom)(void);
@@ -1007,9 +1099,8 @@ typedef struct {
 ```
 
 Three callbacks, all required (§9.2). Everything else the collector needs is
-in the handle or, for an array, in its payload header
-([18 §7](18_ObjectHandler_Build_Plan.md)), which is why there is no
-`array_shape` callback.
+in the handle or, for an array, in its payload header (§5.7), which is why
+there is no `array_shape` callback.
 
 ---
 
@@ -1060,9 +1151,14 @@ object_id_t      stack_scratch_alloc(stack_thread_t * t, uint16_t type,
 /* push/pop/peek per slot kind are static inline in stack.h              */
 
 /* ---- array.h / obj_string.h / value.h : typed constructors ----------- */
-object_id_t array_create(uint16_t type, uint16_t elem_size, uint32_t count);
+object_id_t array_create(uint16_t type, uint16_t elem_size, uint32_t count);  /* §5.7 */
 uint32_t    array_length(object_id_t id);
-void *      array_element_ptr(object_id_t id, uint32_t index);
+void *      array_range_ptr(object_id_t id, uint32_t index, uint32_t count); /* NULL: out of range */
+static inline void * array_element_ptr(object_id_t id, uint32_t index);     /* a range of one */
+object_byref_t array_element_byref(object_id_t id, uint32_t index);         /* ldelema */
+void        array_copy(object_id_t dst, uint32_t dst_index,
+                       object_id_t src, uint32_t src_index, uint32_t count);
+void        array_clear(object_id_t id, uint32_t index, uint32_t count);
 
 object_id_t obj_string_create(const char * utf8, uint32_t len); /* §5.6 */
 object_id_t obj_string_intern(uint16_t literal_index);
@@ -1217,6 +1313,8 @@ The limits behind the codes:
 | Boxed primitives on the stack (`stack.h`, `value_type.c`) | **rejected** — §6.1 |
 | `instance_get_current()` inside stack accessors | **rejected** — thread passed explicitly |
 | Heap ≤ 64 KB | **kept as the v1 profile**, per segment; the id abstracts it — §2.3.1 |
+| Arrays as growable lists (`array_insert`, `array_delete`, in-place resize) | **rejected** — CIL arrays have a fixed length; `List<T>` grows in managed code — §5.7 |
+| Element size re-derived from a mode byte (`T_ARRAY + mode`, `T_DATA`) | **replaced** — `elem_size` in the header, element layout from the type's refmap — §5.7 |
 
 ---
 
@@ -1241,6 +1339,7 @@ The limits behind the codes:
 | Debug object identity | **A generation counter in the id, debug builds only**: 8-bit space / 8-bit generation / 16-bit index, same 32-bit width, so a stale id is rejected at its first use instead of aliasing a recycled handle — §2.1, §3.2, §3.4 |
 | String representation | **UTF-8**, identical on MCU and host. `cli_pack` converts ASCII literals and **errors** on any code point ≥ U+0080 or any unpaired surrogate, unless `--allow-non-ascii` is given — §5.6 |
 | Init failure reporting | **`obj_handler_status_t`**, returned by `obj_handler_init` only — one code per thing the embedder has to fix, appended per slice. Before init errors are returned; after it, embedder bugs go to `on_corrupt` — §9.2 |
+| Array model | **One-dimensional arrays of inline elements** — primitives, ids or structs — with a fixed length. The type's refmap describes one element; `array_range_ptr` is the only range check — §5.7 |
 
 **Still open:**
 
@@ -1252,3 +1351,9 @@ The limits behind the codes:
    all starting values. They are configuration fields now (§7.3, §9), so the
    first host run's allocation histogram and fragmentation ratio (§5.4)
    replace them without a design change.
+3. **Value-type copies and the barrier** *(open, not blocking v1)* —
+   `stobj`, `cpobj`, and `stfld` or `stelem` of a struct write the struct's
+   ids with a byte copy. That is correct while the barrier is the identity
+   (§6.0); tier 2 needs the copy to send each id the type's refmap marks
+   through `objects_write_ref`. Decide with tier 2, for every value-type copy
+   at once, not per array (§5.7).
