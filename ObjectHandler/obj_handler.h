@@ -3,5 +3,5 @@
 #include "instance.h"
 #include "objects.h"
 #include "stack.h"
-#include "strings.h"
+#include "obj_string.h"
 #include "value_type.h"

@@ -1,5 +1,5 @@
-#ifndef STRINGS_H
-#define	STRINGS_H
+#ifndef OBJ_STRING_H
+#define	OBJ_STRING_H
 
 #ifdef	__cplusplus
 extern "C" {
@@ -56,5 +56,5 @@ char * strings_get_text_ptr( object_t object );
 }
 #endif
 
-#endif	/* STRINGS_H */
+#endif	/* OBJ_STRING_H */
 

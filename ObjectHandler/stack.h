@@ -10,7 +10,7 @@ extern "C" {
 
 #include "instance.h"
 #include "value_type.h"
-#include "strings.h"
+#include "obj_string.h"
 		
 ///////////////////////////////////////////////////////////////////////////
     

@@ -1,6 +1,6 @@
 #include "value_type.h"
 #include "heap.h"
-#include "strings.h"
+#include "obj_string.h"
 #include "objects.h"
 
 ///////////////////////////////////////////////////////////////////////////

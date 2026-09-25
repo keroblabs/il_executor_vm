@@ -1,4 +1,4 @@
-#include "strings.h"
+#include "obj_string.h"
 #include "heap.h"
 #include "objects.h"
 #include "arrays_type.h"
