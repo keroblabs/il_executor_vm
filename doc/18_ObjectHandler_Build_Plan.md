@@ -45,7 +45,7 @@ is what makes every item below testable without the rest of the system.
 | ~~OH-2~~ | ~~Allocator: `heap.c`, free list, `heap_release`, `heap_verify`, stats~~ | **P2** | L | OH-1 | done — `1fe5476` |
 | OH-3 | Collector: `gc.c`, roots, scopes, triggers | **P3** | L | OH-2, D5–D7 | §5 tests |
 | OH-4 | Stack: threads, slots, frames | **P4** | M | OH-3 | §6 tests |
-| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-4, D9 | §7 tests |
+| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9; interning with OH-3, `value_compare` with OH-4 | §7 tests |
 | OH-6 | Hardening: sanitizers, coverage, 32-bit release build, stats dump | **P6** | M | OH-2 onward | §8 tests |
 
 D5, D6, D7 and D9 are decisions too, but they are **not** P0: each is consumed
@@ -85,7 +85,7 @@ Every function had an unspecified failure path. Decision:
 
 | Case | Behaviour |
 |---|---|
-| Allocation cannot be satisfied | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, then `on_oom` — A10, 14 §5.2 |
+| Allocation cannot be satisfied | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, then `on_oom` — A10, 14 §5.2. `obj_string_create` also returns `OBJECT_NULL` for invalid UTF-8 (D9) |
 | `on_oom` | **must not return** — it aborts, `longjmp`s, or resets the board. The library has no way to continue and must not pretend it has |
 | `obj_handler_init` | returns `obj_handler_status_t` — one code per thing the embedder has to fix, listed in 14 §9.2 (not a bare `int`) |
 | Detected corruption | `on_corrupt(where, id)`, then return a safe value and keep going, in every build. Aborting is the embedder's choice inside `on_corrupt` (A13), which is what lets §2.1's recording fake run negative tests in a debug build |
@@ -587,8 +587,13 @@ equal through `value_compare` in OH-5.
 
 **Files:** `array.c/.h`, `obj_string.c/.h`, `value.c/.h`.
 
-**Consumes:** D9 string layout and interning (§9). The array layout is
-**decided** in 14 §5.7.
+**Consumes:** the allocator (OH-2) and D9, decided 2026-09-28 in 14 §5.6.
+The array layout is **decided** in 14 §5.7.
+
+**Order (2026-09-28): built before OH-3 and OH-4**, at the owner's request.
+Three pieces wait for the slice they depend on: `obj_string_intern` for D7
+(OH-3), `value_compare` for `stack_slot_t` and B6's rules (OH-4), and the
+test that the collector traces an `array_create` array (OH-3).
 
 **Work:**
 
@@ -611,7 +616,8 @@ equal through `value_compare` in OH-5.
    shape.
 2. `obj_string.c` — UTF-8 bodies per 14 §5.6; `obj_string_create`
    *validates* its input and rejects overlong encodings, truncated sequences
-   and surrogates; the intern table comes from the config.
+   and surrogates; the intern table comes from the config. `obj_string_length`
+   and `obj_string_char_at` count UTF-16 units (D9).
 3. `value.c` — `value_box`/`value_unbox` with a size check; `value_compare`
    over slots, reimplementing Ruffus's mixed-type promotion table with no
    allocation (14 §6.6).
@@ -664,7 +670,7 @@ without the code in front of you.
 | D5 | Rooting-scope API shape | OH-3 | fixed-depth array vs linked scopes |
 | D6 | `gc_poll` and the safepoint contract | OH-3 | must agree with [17 §4.4](17_Threading_Model.md) |
 | D7 | Statics slab and literal pool layout | OH-3 | includes the `OBJECT_SPACE_CONST` contradiction in 14 §3.1 vs §3.3 — the catalogue says "literal-pool index", resolution says byte offset. One of the two is wrong |
-| D9 | String layout and interning | OH-5 | length source, intern table ownership |
+| ~~D9~~ | ~~String layout and interning~~ | OH-5 | **decided 2026-09-28** — 14 §5.6; interning goes with D7 |
 
 D8, the array payload header, was on this list and is now resolved in 14 §5.7:
 an 8-byte header, chosen in review.
@@ -714,6 +720,7 @@ and OH-4, not deferred.
 | Location (2026-09-28) | **`source/object_handler/`, a new implementation**, not patches to the Ruffus copy. `obj_handler.h` moved there; the rest of `ObjectHandler/` was deleted, the originals staying in `ruffusvm/`. Tests in `tests/object_handler/`, CMake target `object_handler` — D3 |
 | Pre-OH-1 decisions (2026-09-28) | [19](19_Session_Checklist.md) A2–A13 and D4, accepted as recommended. Recorded in 14 §§1, 1.1, 3.2, 3.4, 5.2, 7.4, 7.5, 9 and 9.2, and here in D1, D2, §3, §4 and §5 |
 | Coding OH-1 and OH-2 (2026-09-28) | Debug switches default from `NDEBUG`, each overridable with `-D`. `heap_verify` returns 1 or 0 and reports the first fault: release checks order, ranges, accounting and coverage by sums, and `HEAP_DEBUG` adds an exact address walk through the guard headers. A free block that reaches the untouched top rejoins it. The standalone build is `source/object_handler/` configured on its own, which also adds the tests. The per-file recipe compiles each header through a one-line wrapper, since a macro-only header is an empty unit under `-pedantic` |
+| OH-5 first, D9 (2026-09-28) | OH-5 is built before OH-3 and OH-4; interning, `value_compare` and the tracing test wait for their slices (§7). D9: a NUL-terminated UTF-8 payload, `OBJECT_H_ASCII`, `Length` and `obj_string_char_at` in UTF-16 units, `OBJECT_NULL` for invalid UTF-8, `string_type` in the config — 14 §5.6 |
 
 **Nothing remains open before OH-3:** A1–A13 are settled
 ([19 §4](19_Session_Checklist.md)). D5, D6, D7 and D9 (§9) are scheduled decisions, not

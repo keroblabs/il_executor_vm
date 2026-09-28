@@ -354,8 +354,10 @@ These either land in the first commit's headers or block OH-1.
   (includes B3).
 - [ ] **OH-4** — stack: threads, slots, frames (18 §6).
 - [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
-  (18 §7). Decide first: D9 string layout and interning. `String.Split` stays
-  out of `obj_string.c`: it needs the embedder's `string[]` type id (C6).
+  (18 §7), now built before OH-3 and OH-4. D9 decided (14 §5.6). Waiting
+  for later slices: `obj_string_intern` (OH-3, D7), `value_compare` (OH-4,
+  B6) and the tracing test (OH-3). `String.Split` stays out of
+  `obj_string.c`: it needs the embedder's `string[]` type id (C6).
 - [ ] **OH-6** — hardening: sanitizers, coverage, 32-bit `-Os` build,
   statistics dump (18 §8).
 

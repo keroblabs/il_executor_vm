@@ -316,6 +316,7 @@ typedef struct {
 
 enum {                                      /* flags */
     OBJECT_H_INUSE   = 0x01,
+    OBJECT_H_ASCII   = 0x02,                /* strings: every byte < 0x80 — §5.6 */
     OBJECT_H_MARK    = 0x04,                /* GC mark bit — see §7.2         */
     OBJECT_H_SCANNED = 0x08,                /* grey→black, on worklist overflow */
     OBJECT_H_HASREFS = 0x10,                /* payload contains object ids    */
@@ -331,7 +332,8 @@ enum {                                      /* object kind — what the block is
 **A pin is counted, not flagged (A4).** `objects_pin` adds one to the count
 held in `OBJECT_H_PINNED` and `objects_unpin` takes one away, so a `fixed`
 block and a native call can pin the same buffer. An eighth nested pin, or an
-unpin at zero, goes to `on_corrupt`. Bit `0x02` is free.
+unpin at zero, goes to `on_corrupt`. Bit `0x02` is `OBJECT_H_ASCII`, for
+strings (§5.6).
 
 `offset` and `size` are 16 bits because the v1 payload is (§2.3), not because
 anything depends on it: both are private to `heap.c`, and widening them to 32
@@ -657,6 +659,21 @@ semantics at one byte per character, and a program that needs more has to say
 so. Nothing is silently wrong either way. Run-time strings follow the same
 rule — `obj_string_create` takes UTF-8, the `char`-level API decodes rather
 than indexes, and interning compares bytes.
+
+**Layout and length (D9, 2026-09-28).** A string's payload is its UTF-8
+bytes followed by one NUL, with no header: `handle.size` is the byte count
+plus one, and a native can hand the payload to C without copying.
+`OBJECT_H_ASCII` (§3.2) is set at creation when every byte is below 0x80.
+`obj_string_length` counts UTF-16 code units, as ECMA-335 defines `Length`:
+the byte count when `OBJECT_H_ASCII` is set, a decode otherwise, so a
+supplementary character counts two. `obj_string_char_at` returns the UTF-16
+unit at an index — a surrogate, for either half of a supplementary
+character — or -1 out of range, which the interpreter turns into
+`IndexOutOfRangeException`. `obj_string_create` validates strictly: overlong
+forms, truncated sequences, surrogates and code points above U+10FFFF return
+`OBJECT_NULL`, and the caller throws or substitutes U+FFFD first. The type id
+of every string is `obj_handler_config_t.string_type` (§9). Interning waits
+for D7, with OH-3.
 
 ### 5.7 Array payloads — one-dimensional, inline elements
 
@@ -1217,6 +1234,7 @@ object_id_t obj_string_create(const char * utf8, uint32_t len); /* §5.6 */
 object_id_t obj_string_intern(uint16_t literal_index);
 object_id_t obj_string_concat(object_id_t a, object_id_t b);
 uint32_t    obj_string_length(object_id_t id);
+int32_t     obj_string_char_at(object_id_t id, uint32_t index);  /* -1: out of range */
 
 object_id_t value_box(uint16_t type, const void * src, uint32_t bytes);
 void        value_unbox(object_id_t id, void * dst, uint32_t bytes);
@@ -1263,6 +1281,7 @@ typedef struct {
     uint32_t        const_count;
 
     object_id_t   * literals;       uint32_t literal_count;  /* intern table, a root — A6 */
+    uint16_t        string_type;    /* System.String's type id — D9, §5.6 */
 
     uint8_t       * stack_mem;      uint32_t stack_size;     /* all threads */
 
@@ -1308,8 +1327,9 @@ the field is debug-only.
 
 `obj_handler_init` is the only function that returns a status. Every other
 failure follows [18 D1](18_ObjectHandler_Build_Plan.md): allocation returns
-`OBJECT_NULL` only for a request that can never fit, `on_oom` does not
-return, and an embedder bug goes to `on_corrupt` — after which the library
+`OBJECT_NULL` only for a request that can never fit, and `obj_string_create`
+also for bytes that are not valid UTF-8 (§5.6); `on_oom` does not return;
+and an embedder bug goes to `on_corrupt` — after which the library
 returns a safe value and carries on, in every build. Aborting is the
 embedder's choice, made inside `on_corrupt` (A13). Init is the exception
 because it runs before there is an `on_corrupt` to trust — a NULL
@@ -1401,6 +1421,7 @@ The limits behind the codes:
 | Array model | **One-dimensional arrays of inline elements** — primitives, ids or structs — with a fixed length. The type's refmap describes one element; `array_range_ptr` is the only range check — §5.7 |
 | Pre-OH-1 review (2026-09-28) | [19](19_Session_Checklist.md) A2–A13, accepted as recommended: one calling thread (§1); C99 baseline (§1.1); a pin count (§3.2); `heap_release` bumps the generation (§3.4); `OBJECT_NULL` only for a request that can never fit (§5.2); stack roots through a registered scanner, no `[ThreadStatic]` (§7.4); scan rule per kind, 4-aligned ids (§7.5); the intern table in the config (§9); `on_corrupt` always returns (§9.2) |
 | Coding OH-1 and OH-2 (2026-09-28) | The debug handle is **10 bytes**, not 12 (§3.2, §9.1). Non-inline accessors check ids in every build (§3.4). A flat-space id has no handle, so no type, size or kind until D7: the accessors send it to `on_corrupt`. `objects_space_register` refuses the heap tags, `OBJECT_SPACE_FRAME`, handled descriptors, a limit outside 1–65536 and re-registration, and does nothing before init. `heap_release` refuses a pinned object. A zero-byte object gets a handle with offset 0 and no block. OH-2 reads the two segment percentages before `E_GC_PCT` exists; a value above 100 only puts the threshold out of reach |
+| String layout (D9, 2026-09-28) | UTF-8 bytes plus a NUL, no header; `OBJECT_H_ASCII` makes `Length` O(1) for ASCII; `Length` and `obj_string_char_at` count UTF-16 units; invalid UTF-8 returns `OBJECT_NULL`; the type id comes from the config — §5.6. Interning waits for D7 |
 
 **Still open:**
 
