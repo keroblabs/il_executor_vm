@@ -3,7 +3,7 @@
 #include "harness.h"
 #include "fake_embedder.h"
 
-/* A second application beside fake_oh, with regions of its own (doc 14 section 1). */
+/* A second instance beside fake_oh: the library keeps no state outside them (doc 14 section 1). */
 
 #define PAYLOAD     4096u
 #define HANDLES     128u
@@ -117,7 +117,7 @@ TEST_CASE(shutdown_of_one_leaves_the_other)
     CHECK(heap_verify(&fake_oh));
 }
 
-/* ---- two applications, interleaved one operation at a time ---------- */
+/* ---- two instances, interleaved one operation at a time ------------- */
 
 #define MIX_OPS     20000u
 #define MIX_LIVE    64u
@@ -128,11 +128,11 @@ typedef struct {
     uint8_t         fill[MIX_LIVE];
     uint32_t        live;
     uint32_t        ooms;
-} mix_app_t;
+} mix_side_t;
 
-static mix_app_t mix[2];
-static uint32_t  mix_state;
-static uint32_t  mix_op;
+static mix_side_t mix[2];
+static uint32_t   mix_state;
+static uint32_t   mix_op;
 
 static uint32_t mix_rand(void)
 {
@@ -148,42 +148,42 @@ static void mix_dump(void)
 }
 
 /* Each object holds one byte value throughout: a write into the other instance shows here. */
-static void mix_check(const mix_app_t * app, uint32_t k)
+static void mix_check(const mix_side_t * side, uint32_t k)
 {
-    const uint8_t * p = objects_ptr(app->oh, app->id[k]);
-    uint32_t n = objects_size_of(app->oh, app->id[k]);
+    const uint8_t * p = objects_ptr(side->oh, side->id[k]);
+    uint32_t n = objects_size_of(side->oh, side->id[k]);
     uint32_t i;
 
     for (i = 0; i < n; i++)
-        CHECK_EQ(p[i], app->fill[k]);
+        CHECK_EQ(p[i], side->fill[k]);
 }
 
-static void mix_step(mix_app_t * app)
+static void mix_step(mix_side_t * side)
 {
-    if (app->live == 0 || (app->live < MIX_LIVE && mix_rand() % 2 == 0)) {
+    if (side->live == 0 || (side->live < MIX_LIVE && mix_rand() % 2 == 0)) {
         uint32_t bytes = mix_rand() % 48;
         object_id_t id;
 
         fake_oom_armed = 1;
         if (setjmp(fake_oom_jmp) != 0) {
-            app->ooms++;
+            side->ooms++;
             return;
         }
-        id = objects_create(app->oh, FAKE_T_DATA, bytes);
+        id = objects_create(side->oh, FAKE_T_DATA, bytes);
         fake_oom_armed = 0;
         CHECK(id != OBJECT_NULL);
-        app->id[app->live] = id;
-        app->fill[app->live] = (uint8_t)(mix_rand() | 1u);
-        memset(objects_ptr(app->oh, id), app->fill[app->live], bytes);
-        app->live++;
+        side->id[side->live] = id;
+        side->fill[side->live] = (uint8_t)(mix_rand() | 1u);
+        memset(objects_ptr(side->oh, id), side->fill[side->live], bytes);
+        side->live++;
     } else {
-        uint32_t k = mix_rand() % app->live;
+        uint32_t k = mix_rand() % side->live;
 
-        mix_check(app, k);
-        heap_release(app->oh, app->id[k]);
-        app->live--;
-        app->id[k] = app->id[app->live];
-        app->fill[k] = app->fill[app->live];
+        mix_check(side, k);
+        heap_release(side->oh, side->id[k]);
+        side->live--;
+        side->id[k] = side->id[side->live];
+        side->fill[k] = side->fill[side->live];
     }
 }
 
@@ -199,10 +199,10 @@ TEST_CASE(interleaved_instances_stay_consistent)
     mix[1].oh = &b_oh;
     mix_state = 20260928u;
     for (mix_op = 0; mix_op < MIX_OPS; mix_op++) {
-        mix_app_t * app = &mix[mix_rand() % 2];
+        mix_side_t * side = &mix[mix_rand() % 2];
 
-        mix_step(app);
-        CHECK(heap_verify(app->oh));
+        mix_step(side);
+        CHECK(heap_verify(side->oh));
         if (mix_op % 97 == 0)
             for (a = 0; a < 2; a++)
                 for (k = 0; k < mix[a].live; k++)
@@ -222,7 +222,7 @@ TEST_CASE(interleaved_instances_stay_consistent)
     }
     printf("interleaving: allocations ending in on_oom: %lu and %lu\n",
            (unsigned long)mix[0].ooms, (unsigned long)mix[1].ooms);
-    CHECK(mix[1].ooms > 0);                     /* one application ran full beside the other */
+    CHECK(mix[1].ooms > 0);                     /* one instance ran full beside the other */
 }
 
 static const harness_case_t cases[] = {

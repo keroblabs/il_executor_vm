@@ -54,7 +54,7 @@ typedef struct {
     uint16_t        worklist_len;   uint16_t * worklist;
 } obj_handler_config_t;
 
-/* One instance per application; instances share nothing, so each may run on its own thread. */
+/* The application's instance, used only from the application's thread (doc 14 section 1). */
 obj_handler_status_t obj_handler_init(obj_handler_t * oh, const obj_handler_config_t * cfg,
                                       const obj_handler_host_t * host);
 void                 obj_handler_shutdown(obj_handler_t * oh);  /* zeroes the instance */

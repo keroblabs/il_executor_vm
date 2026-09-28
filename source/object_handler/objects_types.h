@@ -130,7 +130,7 @@ typedef struct {
     uint8_t  flags;             /* OBJECT_H_ASCII for an ASCII string, else 0 */
 } object_const_t;
 
-/* ---- the instance, one per application (doc 14 section 1) ----------- */
+/* ---- the application's instance (doc 14 section 1) ------------------ */
 
 typedef struct obj_handler obj_handler_t;
 
