@@ -11,6 +11,21 @@ void obj_string_init(uint16_t string_type)
     obj_string_type = string_type;
 }
 
+/* ldstr: a literal is a constant, read in place (doc 14 section 3.5). */
+object_id_t obj_string_intern(uint16_t literal_index)
+{
+    const object_id_t id = OBJECT_ID(OBJECT_SPACE_CONST, literal_index);
+    object_info_t info;
+
+    if (!objects_info(id, &info, "obj_string_intern: not a constant"))
+        return OBJECT_NULL;
+    if (info.kind != OBJECT_K_STRING) {
+        objects_corrupt("obj_string_intern: the constant is not a string", id);
+        return OBJECT_NULL;
+    }
+    return id;
+}
+
 /* Bytes in the well-formed sequence at s, or 0 (Unicode 15, table 3-7). */
 static uint32_t obj_string_sequence(const uint8_t * s, uint32_t avail)
 {
@@ -87,17 +102,16 @@ static uint32_t obj_string_decode(const uint8_t * s, uint32_t width)
     }
 }
 
-static const object_handle_t * obj_string_handle(object_id_t id, const char * where)
+/* A live string, heap or constant (doc 14 section 3.5). */
+static int obj_string_info(object_id_t id, object_info_t * info, const char * where)
 {
-    const object_handle_t * h = objects_handle_of(id, where);
-
-    if (h == NULL)
-        return NULL;
-    if (h->kind != OBJECT_K_STRING || h->size == 0) {
+    if (!objects_info(id, info, where))
+        return 0;
+    if (info->kind != OBJECT_K_STRING || info->size == 0) {
         objects_corrupt(where, id);
-        return NULL;
+        return 0;
     }
-    return h;
+    return 1;
 }
 
 /* A string of `bytes` UTF-8 bytes; its NUL is already there, since heap_alloc zeroes. */
@@ -132,18 +146,20 @@ object_id_t obj_string_create(const char * utf8, uint32_t len)
 
 object_id_t obj_string_concat(object_id_t a, object_id_t b)
 {
-    const object_handle_t * ha = obj_string_handle(a, "obj_string_concat: not a live string");
-    const object_handle_t * hb = obj_string_handle(b, "obj_string_concat: not a live string");
+    object_info_t ia;
+    object_info_t ib;
+    const int ok_a = obj_string_info(a, &ia, "obj_string_concat: not a live string");
+    const int ok_b = obj_string_info(b, &ib, "obj_string_concat: not a live string");
     uint32_t la;
     uint32_t lb;
     uint8_t * p;
     object_id_t id;
 
-    if (ha == NULL || hb == NULL)
+    if (!ok_a || !ok_b)
         return OBJECT_NULL;
-    la = ha->size - 1u;
-    lb = hb->size - 1u;
-    id = obj_string_alloc(la + lb, (ha->flags & hb->flags & OBJECT_H_ASCII) != 0);
+    la = ia.size - 1u;
+    lb = ib.size - 1u;
+    id = obj_string_alloc(la + lb, (ia.flags & ib.flags & OBJECT_H_ASCII) != 0);
     if (id == OBJECT_NULL)
         return OBJECT_NULL;
     /* Resolved after the allocation, which may collect: a and b must be rooted. */
@@ -155,16 +171,16 @@ object_id_t obj_string_concat(object_id_t a, object_id_t b)
 
 uint32_t obj_string_length(object_id_t id)
 {
-    const object_handle_t * h = obj_string_handle(id, "obj_string_length: not a live string");
+    object_info_t info;
     const uint8_t * s;
     uint32_t n;
     uint32_t i;
     uint32_t units = 0;
 
-    if (h == NULL)
+    if (!obj_string_info(id, &info, "obj_string_length: not a live string"))
         return 0;
-    n = h->size - 1u;
-    if (h->flags & OBJECT_H_ASCII)
+    n = info.size - 1u;
+    if (info.flags & OBJECT_H_ASCII)
         return n;
     s = (const uint8_t *)objects_ptr(id);
     for (i = 0; i < n; i += obj_string_width(s[i]))
@@ -174,17 +190,17 @@ uint32_t obj_string_length(object_id_t id)
 
 int32_t obj_string_char_at(object_id_t id, uint32_t index)
 {
-    const object_handle_t * h = obj_string_handle(id, "obj_string_char_at: not a live string");
+    object_info_t info;
     const uint8_t * s;
     uint32_t n;
     uint32_t i;
     uint32_t unit = 0;
 
-    if (h == NULL)
+    if (!obj_string_info(id, &info, "obj_string_char_at: not a live string"))
         return -1;
-    n = h->size - 1u;
+    n = info.size - 1u;
     s = (const uint8_t *)objects_ptr(id);
-    if (h->flags & OBJECT_H_ASCII)
+    if (info.flags & OBJECT_H_ASCII)
         return index < n ? (int32_t)s[index] : -1;
 
     for (i = 0; i < n; ) {

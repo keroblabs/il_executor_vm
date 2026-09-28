@@ -61,6 +61,9 @@ TEST_CASE(init_ok)
     CHECK(object_spaces[OBJECT_SPACE_HEAP].handles == fake_handles());
     CHECK(object_spaces[OBJECT_SPACE_HEAP].base == fake_payload());
     CHECK_EQ(object_spaces[OBJECT_SPACE_HEAP].limit, HANDLES);
+    CHECK(object_spaces[OBJECT_SPACE_STATIC].base == fake_statics());
+    CHECK_EQ(object_spaces[OBJECT_SPACE_STATIC].limit, FAKE_STATICS_BYTES);
+    CHECK_EQ(object_spaces[OBJECT_SPACE_CONST].limit, 0);   /* the default fake has no constants */
 }
 
 TEST_CASE(init_arg_null)
@@ -241,18 +244,15 @@ TEST_CASE(resolve_heap_handle)
 
 TEST_CASE(resolve_flat_space_and_byref)
 {
-    static uint8_t slab[256];
-    object_space_t desc = { slab, NULL, sizeof slab, OBJECT_SP_WRITABLE | OBJECT_SP_ROOT };
     object_byref_t b;
 
     fake_init(PAYLOAD, HANDLES);
-    objects_space_register(OBJECT_SPACE_STATIC, &desc);
-    CHECK(objects_ptr(OBJECT_ID(OBJECT_SPACE_STATIC, 40)) == slab + 40);
+    CHECK(objects_ptr(OBJECT_ID(OBJECT_SPACE_STATIC, 40)) == fake_statics() + 40);
 
     b.id = OBJECT_ID(OBJECT_SPACE_STATIC, 40);
     b.offset = 8;
     b._pad = 0;
-    CHECK(objects_byref_ptr(b) == slab + 48);
+    CHECK(objects_byref_ptr(b) == fake_statics() + 48);
     CHECK_EQ(fake_corrupt_count, 0);
 }
 
@@ -328,14 +328,11 @@ TEST_CASE(debug_rejects_wrong_generation)
 
 /* ---- accessors and registration ------------------------------------- */
 
-TEST_CASE(accessors_reject_non_heap_ids)
+TEST_CASE(accessors_reject_non_objects)
 {
-    static uint8_t slab[64];
-    object_space_t desc = { slab, NULL, sizeof slab, OBJECT_SP_WRITABLE };
-    object_id_t flat = OBJECT_ID(OBJECT_SPACE_STATIC, 8);
+    object_id_t flat = OBJECT_ID(OBJECT_SPACE_STATIC, 8);  /* a static field, not an object */
 
     fake_init(PAYLOAD, HANDLES);
-    objects_space_register(OBJECT_SPACE_STATIC, &desc);
     fake_allow_corrupt();
     CHECK_EQ(objects_type_of(flat), 0);
     CHECK_EQ(objects_size_of(flat), 0);
@@ -359,19 +356,21 @@ TEST_CASE(space_register_rejects_misuse)
     fake_allow_corrupt();
     objects_space_register(OBJECT_SPACE_COUNT, &ok);
     objects_space_register(OBJECT_SPACE_HEAP, &ok);
+    objects_space_register(OBJECT_SPACE_CONST, &ok);        /* init configures CONST and STATIC */
+    objects_space_register(OBJECT_SPACE_STATIC, &ok);
     objects_space_register(OBJECT_SPACE_FRAME, &ok);
-    objects_space_register(OBJECT_SPACE_CONST, NULL);
-    objects_space_register(OBJECT_SPACE_CONST, &handled);
-    objects_space_register(OBJECT_SPACE_CONST, &empty);
-    objects_space_register(OBJECT_SPACE_CONST, &huge);
-    CHECK_EQ(fake_corrupt_count, 7);
-    CHECK_EQ(object_spaces[OBJECT_SPACE_CONST].limit, 0);
+    objects_space_register(OBJECT_SPACE_NATIVE, NULL);
+    objects_space_register(OBJECT_SPACE_NATIVE, &handled);
+    objects_space_register(OBJECT_SPACE_NATIVE, &empty);
+    objects_space_register(OBJECT_SPACE_NATIVE, &huge);
+    CHECK_EQ(fake_corrupt_count, 9);
+    CHECK_EQ(object_spaces[OBJECT_SPACE_NATIVE].limit, 0);
 
-    objects_space_register(OBJECT_SPACE_CONST, &ok);
-    CHECK_EQ(fake_corrupt_count, 7);
-    CHECK_EQ(object_spaces[OBJECT_SPACE_CONST].limit, sizeof slab);
-    objects_space_register(OBJECT_SPACE_CONST, &ok);
-    CHECK_EQ(fake_corrupt_count, 8);
+    objects_space_register(OBJECT_SPACE_NATIVE, &ok);
+    CHECK_EQ(fake_corrupt_count, 9);
+    CHECK_EQ(object_spaces[OBJECT_SPACE_NATIVE].limit, sizeof slab);
+    objects_space_register(OBJECT_SPACE_NATIVE, &ok);
+    CHECK_EQ(fake_corrupt_count, 10);
 }
 
 TEST_CASE(space_register_before_init_is_ignored)
@@ -379,10 +378,10 @@ TEST_CASE(space_register_before_init_is_ignored)
     static uint8_t slab[64];
     object_space_t ok = { slab, NULL, sizeof slab, 0 };
 
-    objects_space_register(OBJECT_SPACE_CONST, &ok);
-    CHECK_EQ(object_spaces[OBJECT_SPACE_CONST].limit, 0);
+    objects_space_register(OBJECT_SPACE_NATIVE, &ok);
+    CHECK_EQ(object_spaces[OBJECT_SPACE_NATIVE].limit, 0);
     fake_init(PAYLOAD, HANDLES);
-    CHECK_EQ(object_spaces[OBJECT_SPACE_CONST].limit, 0);
+    CHECK_EQ(object_spaces[OBJECT_SPACE_NATIVE].limit, 0);
 }
 
 TEST_CASE(write_ref_and_escape_are_identity)
@@ -417,7 +416,7 @@ static const harness_case_t cases[] = {
     HARNESS_CASE(debug_rejects_unregistered_space),
     HARNESS_CASE(debug_rejects_handle_not_in_use),
     HARNESS_CASE(debug_rejects_wrong_generation),
-    HARNESS_CASE(accessors_reject_non_heap_ids),
+    HARNESS_CASE(accessors_reject_non_objects),
     HARNESS_CASE(space_register_rejects_misuse),
     HARNESS_CASE(space_register_before_init_is_ignored),
     HARNESS_CASE(write_ref_and_escape_are_identity),

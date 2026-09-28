@@ -23,7 +23,9 @@ typedef enum {
     OBJ_HANDLER_E_PAYLOAD_SIZE,     /* < 16, > HEAP_MAX_PAYLOAD, or not a multiple of 8 */
     OBJ_HANDLER_E_HANDLES,          /* handles NULL, or handle_count < 2 or > 65536 */
     OBJ_HANDLER_E_WORKLIST,         /* worklist NULL or worklist_len == 0 */
-    OBJ_HANDLER_E_HOST_CALLBACK     /* type_refmap, on_oom or on_corrupt is NULL */
+    OBJ_HANDLER_E_HOST_CALLBACK,    /* type_refmap, on_oom or on_corrupt is NULL */
+    OBJ_HANDLER_E_STATICS,          /* statics malformed, or its refmap marks bytes 0-7 */
+    OBJ_HANDLER_E_CONST             /* the constant table, or one of its entries */
 } obj_handler_status_t;
 
 typedef struct {
@@ -47,13 +49,13 @@ typedef struct {
 
     uint8_t         gc_recover_pct, gc_damp_step_pct, gc_damp_cap_pct;
 
-    uint8_t       * statics;        uint32_t statics_size;
-    const uint8_t * statics_refmap;
+    uint8_t       * statics;        uint32_t statics_size;  /* 0: no statics */
+    const uint8_t * statics_refmap;                         /* one bit per word; NULL: no ids */
 
-    const uint8_t * const_base;     /* immutable image, may be flash */
-    uint32_t        const_count;
+    const uint8_t * const_base;     /* the constant table, may be flash (D7) */
+    uint32_t        const_count;    /* entries, the reserved entry 0 included; 0: none */
+    uint32_t        const_size;     /* table and payloads, in bytes */
 
-    object_id_t   * literals;       uint32_t literal_count;
     uint16_t        string_type;    /* the embedder's type id for strings (D9) */
 
     uint8_t       * stack_mem;      uint32_t stack_size;

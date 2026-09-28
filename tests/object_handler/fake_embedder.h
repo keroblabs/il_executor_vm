@@ -16,6 +16,9 @@ enum {
 };
 
 #define FAKE_MAX_HANDLES    65536u
+#define FAKE_STATICS_BYTES  256u        /* words 2 and 3 hold ids */
+#define FAKE_CONST_MAX      16u         /* table entries, the reserved one included */
+#define FAKE_CONST_BYTES    4096u
 
 extern obj_handler_config_t fake_cfg;
 extern obj_handler_host_t   fake_host;
@@ -29,11 +32,24 @@ extern const char * fake_corrupt_where;
 extern object_id_t  fake_corrupt_id;
 
 void              fake_config(uint32_t payload_size, uint32_t handle_count);
+void              fake_start(void);         /* obj_handler_init on fake_cfg, which must pass */
 void              fake_init(uint32_t payload_size, uint32_t handle_count);
 void              fake_allow_corrupt(void);
 void              fake_dump(void);
 uint8_t         * fake_payload(void);
 object_handle_t * fake_handles(void);
+uint8_t         * fake_statics(void);
+
+/* A constant table laid out the way cli_pack lays it out (doc 14 section 3.5). */
+void              fake_consts_begin(void);
+uint16_t          fake_const_add(uint16_t type, uint8_t kind, uint8_t flags,
+                                 const void * payload, uint32_t size);
+uint16_t          fake_const_string(const char * utf8, uint32_t len);
+uint16_t          fake_const_array(uint16_t type, uint16_t elem_size, uint16_t count,
+                                   const void * elements);
+void              fake_consts_install(void);  /* into fake_cfg, after fake_config */
+object_const_t  * fake_const_entry(uint16_t index);
+uint8_t         * fake_const_bytes(void);
 
 /* Requires stmt to end in on_oom. Locals that stmt writes are indeterminate afterwards. */
 #define FAKE_EXPECT_OOM(stmt) \

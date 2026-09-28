@@ -17,11 +17,11 @@ object_id_t value_box(uint16_t type, const void * src, uint32_t bytes)
 
 void value_unbox(object_id_t id, void * dst, uint32_t bytes)
 {
-    const object_handle_t * h = objects_handle_of(id, "value_unbox: not a live object");
+    object_info_t info;
 
-    if (h == NULL)
+    if (!objects_info(id, &info, "value_unbox: not a live object"))
         return;
-    if (h->kind != OBJECT_K_BOX || h->size != bytes || (dst == NULL && bytes != 0)) {
+    if (info.kind != OBJECT_K_BOX || info.size != bytes || (dst == NULL && bytes != 0)) {
         objects_corrupt("value_unbox: not a box of that size", id);
         return;
     }

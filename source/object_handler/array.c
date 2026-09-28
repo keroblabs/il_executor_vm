@@ -2,20 +2,15 @@
 
 #define ARRAY_HEADER    ((uint32_t)sizeof(array_header_t))
 
-/* The header of a live array, or NULL once a bad id has gone to on_corrupt. */
-static array_header_t * array_header_of(object_id_t id, const char * where,
-                                        const object_handle_t ** handle)
+/* The header of a live array, heap or constant, or NULL once a bad id has gone to on_corrupt. */
+static array_header_t * array_header_of(object_id_t id, const char * where, object_info_t * info)
 {
-    const object_handle_t * h = objects_handle_of(id, where);
-
-    if (h == NULL)
+    if (!objects_info(id, info, where))
         return NULL;
-    if (h->kind != OBJECT_K_ARRAY) {
+    if (info->kind != OBJECT_K_ARRAY) {
         objects_corrupt(where, id);
         return NULL;
     }
-    if (handle != NULL)
-        *handle = h;
     return (array_header_t *)objects_ptr(id);
 }
 
@@ -58,14 +53,16 @@ object_id_t array_create(uint16_t type, uint16_t elem_size, uint32_t count)
 
 uint32_t array_length(object_id_t id)
 {
-    const array_header_t * hdr = array_header_of(id, "array_length: not a live array", NULL);
+    object_info_t info;
+    const array_header_t * hdr = array_header_of(id, "array_length: not a live array", &info);
 
     return hdr != NULL ? hdr->count : 0;
 }
 
 void * array_range_ptr(object_id_t id, uint32_t index, uint32_t count)
 {
-    array_header_t * hdr = array_header_of(id, "array_range_ptr: not a live array", NULL);
+    object_info_t info;
+    array_header_t * hdr = array_header_of(id, "array_range_ptr: not a live array", &info);
 
     if (hdr == NULL)
         return NULL;
@@ -77,7 +74,8 @@ void * array_range_ptr(object_id_t id, uint32_t index, uint32_t count)
 
 object_byref_t array_element_byref(object_id_t id, uint32_t index)
 {
-    const array_header_t * hdr = array_header_of(id, "array_element_byref: not a live array", NULL);
+    object_info_t info;
+    const array_header_t * hdr = array_header_of(id, "array_element_byref: not a live array", &info);
     object_byref_t b;
 
     b.id = OBJECT_NULL;
@@ -93,12 +91,17 @@ object_byref_t array_element_byref(object_id_t id, uint32_t index)
 void array_copy(object_id_t dst, uint32_t dst_index,
                 object_id_t src, uint32_t src_index, uint32_t count)
 {
-    const object_handle_t * dh = NULL;
-    array_header_t * d = array_header_of(dst, "array_copy: destination is not a live array", &dh);
-    array_header_t * s = array_header_of(src, "array_copy: source is not a live array", NULL);
+    object_info_t di;
+    object_info_t si;
+    array_header_t * d = array_header_of(dst, "array_copy: destination is not a live array", &di);
+    array_header_t * s = array_header_of(src, "array_copy: source is not a live array", &si);
 
     if (d == NULL || s == NULL)
         return;
+    if (di.constant) {
+        objects_corrupt("array_copy: destination is a constant", dst);
+        return;
+    }
     if (d->elem_size != s->elem_size) {
         objects_corrupt("array_copy: element sizes differ", dst);
         return;
@@ -109,7 +112,7 @@ void array_copy(object_id_t dst, uint32_t dst_index,
         return;
     }
 
-    if (d->elem_size == sizeof(object_id_t) && (dh->flags & OBJECT_H_HASREFS)) {
+    if (d->elem_size == sizeof(object_id_t) && (di.flags & OBJECT_H_HASREFS)) {
         /* A reference array: every id goes through the barrier, in overlap-safe order. */
         object_id_t * to = (object_id_t *)(void *)array_at(d, dst_index);
         const object_id_t * from = (const object_id_t *)(void *)array_at(s, src_index);
@@ -129,10 +132,15 @@ void array_copy(object_id_t dst, uint32_t dst_index,
 
 void array_clear(object_id_t id, uint32_t index, uint32_t count)
 {
-    array_header_t * hdr = array_header_of(id, "array_clear: not a live array", NULL);
+    object_info_t info;
+    array_header_t * hdr = array_header_of(id, "array_clear: not a live array", &info);
 
     if (hdr == NULL)
         return;
+    if (info.constant) {
+        objects_corrupt("array_clear: the array is a constant", id);
+        return;
+    }
     if (index > hdr->count || count > hdr->count - index) {
         objects_corrupt("array_clear: range outside the array", id);
         return;

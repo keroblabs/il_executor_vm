@@ -18,6 +18,13 @@ static union { uint64_t align; uint8_t bytes[HEAP_MAX_PAYLOAD]; } fake_payload_m
 static object_handle_t fake_handle_mem[FAKE_MAX_HANDLES];
 static uint16_t        fake_worklist_mem[64];
 
+static union { uint64_t align; uint8_t bytes[FAKE_STATICS_BYTES]; } fake_statics_mem;
+static const uint8_t fake_statics_map[FAKE_STATICS_BYTES / 32] = { 0x0C };
+
+static union { uint64_t align; uint8_t bytes[FAKE_CONST_BYTES]; } fake_const_mem;
+static uint32_t fake_const_count;
+static uint32_t fake_const_used;
+
 static const uint8_t fake_map_node[] = { 0x01 };
 static const uint8_t fake_map_pair[] = { 0x03 };
 
@@ -103,14 +110,101 @@ void fake_config(uint32_t payload_size, uint32_t handle_count)
     fake_cfg.gc_damp_cap_pct             = 90;
     fake_cfg.worklist                    = fake_worklist_mem;
     fake_cfg.worklist_len                = sizeof fake_worklist_mem / sizeof fake_worklist_mem[0];
+    fake_cfg.statics                     = fake_statics_mem.bytes;
+    fake_cfg.statics_size                = FAKE_STATICS_BYTES;
+    fake_cfg.statics_refmap              = fake_statics_map;
     fake_cfg.string_type                 = FAKE_T_STRING;
+}
+
+void fake_start(void)
+{
+    CHECK_EQ(obj_handler_init(&fake_cfg, &fake_host), OBJ_HANDLER_OK);
+    harness_set_dump(fake_dump);
 }
 
 void fake_init(uint32_t payload_size, uint32_t handle_count)
 {
     fake_config(payload_size, handle_count);
-    CHECK_EQ(obj_handler_init(&fake_cfg, &fake_host), OBJ_HANDLER_OK);
-    harness_set_dump(fake_dump);
+    fake_start();
+}
+
+void fake_consts_begin(void)
+{
+    memset(&fake_const_mem, 0, sizeof fake_const_mem);
+    fake_const_count = 1;
+    fake_const_used = FAKE_CONST_MAX * (uint32_t)sizeof(object_const_t);
+}
+
+uint16_t fake_const_add(uint16_t type, uint8_t kind, uint8_t flags,
+                        const void * payload, uint32_t size)
+{
+    object_const_t * c;
+
+    CHECK(fake_const_count < FAKE_CONST_MAX && fake_const_used + size <= FAKE_CONST_BYTES);
+    c = fake_const_entry((uint16_t)fake_const_count);
+    c->offset = fake_const_used;
+    c->size   = size;
+    c->type   = type;
+    c->kind   = kind;
+    c->flags  = flags;
+    if (size != 0)
+        memcpy(fake_const_mem.bytes + fake_const_used, payload, size);
+    fake_const_used = (fake_const_used + size + 7u) & ~7u;
+    return (uint16_t)fake_const_count++;
+}
+
+uint16_t fake_const_string(const char * utf8, uint32_t len)
+{
+    char buf[256];
+    uint8_t flags = OBJECT_H_ASCII;
+    uint32_t i;
+
+    CHECK(len < sizeof buf);
+    for (i = 0; i < len; i++)
+        if ((unsigned char)utf8[i] >= 0x80)
+            flags = 0;
+    memcpy(buf, utf8, len);
+    buf[len] = '\0';
+    return fake_const_add(FAKE_T_STRING, OBJECT_K_STRING, flags, buf, len + 1u);
+}
+
+uint16_t fake_const_array(uint16_t type, uint16_t elem_size, uint16_t count,
+                          const void * elements)
+{
+    uint8_t buf[512];
+    array_header_t hdr;
+    const uint32_t bytes = (uint32_t)count * elem_size;
+
+    CHECK(sizeof hdr + bytes <= sizeof buf);
+    memset(&hdr, 0, sizeof hdr);
+    hdr.count = count;
+    hdr.elem_size = elem_size;
+    memcpy(buf, &hdr, sizeof hdr);
+    if (bytes != 0)
+        memcpy(buf + sizeof hdr, elements, bytes);
+    return fake_const_add(type, OBJECT_K_ARRAY, 0, buf, (uint32_t)sizeof hdr + bytes);
+}
+
+void fake_consts_install(void)
+{
+    fake_cfg.const_base  = fake_const_mem.bytes;
+    fake_cfg.const_count = fake_const_count;
+    fake_cfg.const_size  = fake_const_used;
+}
+
+object_const_t * fake_const_entry(uint16_t index)
+{
+    return (object_const_t *)(void *)fake_const_mem.bytes + index;
+}
+
+uint8_t * fake_const_bytes(void)
+{
+    return fake_const_mem.bytes;
+}
+
+uint8_t * fake_statics(void)
+{
+    return fake_statics_mem.bytes;
 }
 
 void fake_allow_corrupt(void)

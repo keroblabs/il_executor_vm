@@ -120,6 +120,16 @@ typedef struct {
     uint32_t _reserved;         /* keeps elements 8-byte aligned */
 } array_header_t;
 
+/* ---- constant table entry, an image format (doc 14 section 3.5) ----- */
+
+typedef struct {
+    uint32_t offset;            /* payload offset from const_base; 8-aligned, past the table */
+    uint32_t size;              /* payload bytes */
+    uint16_t type;
+    uint8_t  kind;              /* OBJECT_K_*, never FREE */
+    uint8_t  flags;             /* OBJECT_H_ASCII for an ASCII string, else 0 */
+} object_const_t;
+
 #if !OBJECT_DEBUG_REFS
 OBJECT_STATIC_ASSERT(sizeof(object_handle_t) == 8, handle_is_8_bytes);
 #else
@@ -127,6 +137,7 @@ OBJECT_STATIC_ASSERT(OBJECT_SPACE_COUNT <= 0x100u, debug_ids_carry_8_bit_spaces)
 #endif
 OBJECT_STATIC_ASSERT(sizeof(object_byref_t) == 8, byref_is_8_bytes);
 OBJECT_STATIC_ASSERT(sizeof(array_header_t) == 8, array_header_is_8_bytes);
+OBJECT_STATIC_ASSERT(sizeof(object_const_t) == 12, const_entry_is_12_bytes);
 OBJECT_STATIC_ASSERT(HEAP_SEGMENTS >= 1 && HEAP_SEGMENTS <= 16, heap_segments_fit_the_tags);
 
 #ifdef __cplusplus

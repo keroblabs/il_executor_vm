@@ -65,6 +65,20 @@ void        objects_space_register(uint16_t tag, const object_space_t * desc);
 object_handle_t * objects_handle_of(object_id_t id, const char * where);
 void        objects_corrupt(const char * where, object_id_t id);
 
+/* What a live heap handle or constant entry says; a constant's flags hold only OBJECT_H_ASCII. */
+typedef struct {
+    uint32_t size;
+    uint16_t type;
+    uint8_t  kind;
+    uint8_t  flags;
+    uint8_t  constant;          /* immutable and never freed (D7) */
+} object_info_t;
+
+int         objects_info(object_id_t id, object_info_t * out, const char * where);
+void        objects_init(uint8_t * statics, uint32_t statics_size,
+                         const uint8_t * const_base, uint32_t const_count);
+void        objects_shutdown(void);
+
 #ifdef __cplusplus
 }
 #endif
