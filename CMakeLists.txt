@@ -1,8 +1,14 @@
-cmake_minimum_required(VERSION 3.10)
-
-add_definitions(-DUNIX)
+cmake_minimum_required(VERSION 3.13)
 
 set(MODULE_NAME         cli_parser)
+project(                ${MODULE_NAME})
+
+# ObjectHandler comes first, so it inherits none of the parser's include paths or definitions.
+add_subdirectory(source/object_handler)
+enable_testing()
+add_subdirectory(tests/object_handler)
+
+add_definitions(-DUNIX)
 
 set(INCLUDE_DIRS        ./
                         ./source
@@ -63,7 +69,6 @@ set(SOURCE_FILES        ./source/main.c
 
 include_directories(    ${INCLUDE_DIRS} )
 
-project(                ${MODULE_NAME})
 add_executable(         ${MODULE_NAME}
                         ${SOURCE_FILES})
 
