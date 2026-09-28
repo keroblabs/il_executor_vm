@@ -312,7 +312,7 @@ typedef struct {
 #if OBJECT_DEBUG_REFS
     uint8_t  gen;      /* 1..255, never 0; bumped on free — §2.1, §3.4      */
 #endif
-} object_handle_t;     /* 8 bytes release, 12 debug */
+} object_handle_t;     /* 8 bytes release, 10 debug */
 
 enum {                                      /* flags */
     OBJECT_H_INUSE   = 0x01,
@@ -406,6 +406,13 @@ the device — but note §0.2 of
 [18_ObjectHandler_Build_Plan.md](18_ObjectHandler_Build_Plan.md): a *device
 debug build* is the same configuration with these switches on, which is what
 makes the checks usable on real hardware when something is wrong.
+
+**Outside `objects_ptr`, ids are checked in every build.** The accessors that
+are not inline — `objects_type_of`, `_size_of`, `_kind_of`, `_clone`, `_pin`,
+`_unpin` and `heap_release` — validate the space, the index,
+`OBJECT_H_INUSE` and, in debug, the generation, and send a bad id to
+`on_corrupt`. `objects_ptr` is the one path that resolves blind in release,
+because it is the hot one.
 
 ---
 
@@ -1291,8 +1298,9 @@ exhausts handles while payload remains free is collecting at the wrong
 threshold, which is what `gc_handle_pct` (§7.3) exists to catch. `cli_pack`
 emits the default; nothing at run time changes it.
 
-A **debug** build's handle is 12 bytes rather than 8 (§3.2), so the same
-`handle_count` costs half as much again — 16 KB becomes 24 KB. That is the
+A **debug** build's handle is 10 bytes rather than 8 (§3.2) — 9, padded to
+the 2-byte alignment of its fields — so the same `handle_count` costs a
+quarter as much again: 16 KB becomes 20 KB. That is the
 price of the generation check on a device debug build, and it is the reason
 the field is debug-only.
 
@@ -1392,6 +1400,7 @@ The limits behind the codes:
 | Init failure reporting | **`obj_handler_status_t`**, returned by `obj_handler_init` only — one code per thing the embedder has to fix, appended per slice. Before init errors are returned; after it, embedder bugs go to `on_corrupt` — §9.2 |
 | Array model | **One-dimensional arrays of inline elements** — primitives, ids or structs — with a fixed length. The type's refmap describes one element; `array_range_ptr` is the only range check — §5.7 |
 | Pre-OH-1 review (2026-09-28) | [19](19_Session_Checklist.md) A2–A13, accepted as recommended: one calling thread (§1); C99 baseline (§1.1); a pin count (§3.2); `heap_release` bumps the generation (§3.4); `OBJECT_NULL` only for a request that can never fit (§5.2); stack roots through a registered scanner, no `[ThreadStatic]` (§7.4); scan rule per kind, 4-aligned ids (§7.5); the intern table in the config (§9); `on_corrupt` always returns (§9.2) |
+| Coding OH-1 and OH-2 (2026-09-28) | The debug handle is **10 bytes**, not 12 (§3.2, §9.1). Non-inline accessors check ids in every build (§3.4). A flat-space id has no handle, so no type, size or kind until D7: the accessors send it to `on_corrupt`. `objects_space_register` refuses the heap tags, `OBJECT_SPACE_FRAME`, handled descriptors, a limit outside 1–65536 and re-registration, and does nothing before init. `heap_release` refuses a pinned object. A zero-byte object gets a handle with offset 0 and no block. OH-2 reads the two segment percentages before `E_GC_PCT` exists; a value above 100 only puts the threshold out of reach |
 
 **Still open:**
 

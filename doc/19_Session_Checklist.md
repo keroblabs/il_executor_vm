@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-28**, at commit `b3dd1bf`.
+State recorded here: **2026-09-28**, at commit `1fe5476`.
 
 ---
 
@@ -28,7 +28,7 @@ project's architecture and rewrites its details
 | `cli_pack` | host tool: reads .NET assemblies, resolves and folds everything it can, writes one `.vxb` image | parser front end done — `source/`, [Phase 0](99_phase0_work.md); the rest not started |
 | `cli_exec` | runs a `.vxb` image, on the device or the host | not started |
 | `cli_dump` | prints an image, for inspection and tests | not started |
-| **ObjectHandler** | standalone C library for objects, the heap, per-thread stacks and the collector; knows nothing about CIL | contract [14](14_ObjectHandler.md), plan [18](18_ObjectHandler_Build_Plan.md); implementation starting |
+| **ObjectHandler** | standalone C library for objects, the heap, per-thread stacks and the collector; knows nothing about CIL | contract [14](14_ObjectHandler.md), plan [18](18_ObjectHandler_Build_Plan.md); **OH-1 and OH-2 built and tested** — ids, spaces, init, allocator; next OH-3, the collector |
 
 **Current focus: ObjectHandler v1**, built in the order of doc 18 and tested
 until it is the component nobody has to suspect. After it come the image
@@ -79,7 +79,10 @@ Decided. Changing one means changing the contract first.
 | Arrays | one-dimensional, inline elements, fixed length; the type's refmap describes one element | 14 §5.7 |
 | Stack | typed slots and overlapped frames in v1; frame scratch and the size-class recycler deferred | 14 §6.0 |
 | Collector | tricolour mark-sweep, precise, non-moving in v1; a 75 % threshold sets a flag, and a failed allocation collects at once | 14 §7 |
-| Init failures | `obj_handler_status_t`, from `obj_handler_init` only; after init, embedder bugs go to `on_corrupt` | 14 §9.2 |
+| Init failures | `obj_handler_status_t`, from `obj_handler_init` only; after init, embedder bugs go to `on_corrupt`, which always returns | 14 §9.2 |
+| Allocation failure | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, `on_oom` | 14 §5.2 |
+| Pins | a count, 0–7, in the handle's flags | 14 §3.2 |
+| Compiler baseline | C99, also built as C11; `-Wall -Wextra -Werror -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes` | 14 §1.1 |
 
 ### 2.3 Hard rules
 
@@ -110,8 +113,8 @@ Decided. Changing one means changing the contract first.
 - **Docs:** British spelling, decision-dense, tables, cross-references written
   as "14 §5.7".
 - **Code comments** state only what the code cannot show, in one short line.
-- **Line endings** are kept per file: most Ruffus headers are CRLF, most `.c`
-  files LF.
+- **Line endings:** LF in `source/object_handler/` and `tests/object_handler/`
+  (A5); elsewhere kept per file.
 
 ### 2.5 Environment
 
@@ -119,22 +122,20 @@ Decided. Changing one means changing the contract first.
 |---|---|
 | Repository | `/home/wifi/projects/cli_parser`; `/home/wifi/projects/ruffusvm` is reference only |
 | Host compiler | gcc 13, Linux |
-| Build | CMake 3.28.3; `cmake --build build` builds `cli_parser` |
+| Build | CMake 3.28.3; `cmake --build build` builds `cli_parser`, ObjectHandler and its tests; the three test trees are in §5.3 |
 | Device compiler | `/home/wifi/gcc_toolchain/bin/arm-none-eabi-gcc` 14.2.1 with newlib, e.g. `-mcpu=cortex-m4 -mthumb` |
 
 ### 2.6 How every change is verified
 
-1. **Compile every file of `source/object_handler/` on its own**, with the
-   include path set to that directory alone and
-   `-Wall -Wextra -Werror -pedantic`, under C99 and C11 until A5 picks one.
-   The baseline is zero diagnostics.
-2. **Prove a behaviour change with a harness** that fails before the change
-   and passes after it, one process per case, built with
-   `-fsanitize=address,undefined`.
-3. **Step 1 runs on the ARM compiler too**: all of the library is device
-   code.
-4. **Once OH-T exists,** `ctest` in the debug, release and standalone builds
-   replaces steps 1 and 2 (18 §0).
+1. **`ctest` in three builds** (18 §0): debug with ASan and UBSan, release,
+   and standalone — the library configured on its own, which proves it
+   reaches nothing in `source/`. Every case runs in its own process; a case
+   that means something in one build only exits 77 and is reported as
+   skipped. Baseline: 54 cases pass, with zero warnings.
+2. **Every library file on its own, through the ARM compiler** and host gcc,
+   C99 and C11, debug and release switches. Baseline: zero diagnostics.
+3. **A behaviour change is proved by a case** that fails before the change
+   and passes after it.
 
 The commands are in §5.3.
 
@@ -159,19 +160,34 @@ The commands are in §5.3.
 | `358f7c2` | `obj_handler.h`: Ruffus includes dropped |
 | `5d63f74` | checklist: session record |
 | `b3dd1bf` | the rest of the Ruffus copy deleted; docs 18, 19 synced |
+| `2fdecdf` | checklist: the deletion recorded |
+| `b999151` | A2–A13 decided; docs 11, 14, 17, 18, 19 |
+| `745922d` | D4: the `source/framework/` objects and stack draft deleted |
+| `7ff3a8f` | OH-1: ids, config, spaces, resolution, init; harness, fake embedder, CMake/CTest |
+| `1fe5476` | OH-2: allocator, free list, `heap_release`, `heap_verify`, stats; `objects_create`/`clone`/`pin` |
 
 ### 3.2 Code, file by file
 
-`source/object_handler/`, the new library (A1):
+`source/object_handler/` — the library; C99, LF:
 
-| File | State | Grows in |
+| File | Holds | Slice |
 |---|---|---|
-| `obj_handler.h` | include guard and `obj_handler_status_t` (D1); compiles on its own, host and ARM, C99 and C11 | OH-1: init, config and host structs, and an include for each module header as it lands |
+| `obj_handler_config.h` | the one configuration: space count, segments, `HEAP_MAX_PAYLOAD`, string encoding; the four debug switches, on unless `NDEBUG` | OH-1 |
+| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`; `OBJECT_LIKELY`; layout asserts | OH-1 |
+| `objects.c/.h` | the space table, `objects_ptr` (checked in debug), registration, accessors, `objects_create`/`clone`/`promote`/`pin`/`unpin`, the identity barrier | OH-1, OH-2 |
+| `obj_handler.c/.h` | the umbrella: status codes, host and config structs, `obj_handler_init` with its eight checks, `obj_handler_shutdown` | OH-1 |
+| `heap.c/.h` | first fit with coalescing, bump top, handle free list with quarantine, generations, guard headers and poisoning in debug, `heap_verify`, `heap_stats` | OH-2 |
+| `gc.c/.h` | stub: `gc_request` and `gc_collect` do nothing until OH-3 | OH-2 |
+| `CMakeLists.txt` | target `object_handler`; configured on its own, it is the standalone build and adds the tests | OH-1 |
 
-Nothing else carried over from the Ruffus copy. Every other file was built on
-its model — 16-bit `object_t`, the `app_instance` global, `types.h`, the `T_*`
-mode byte — and none would build against doc 14 without a rewrite. What each
-slice takes from Ruffus, as design rather than code, is in 13 §§4 and 6.
+`tests/object_handler/`: `harness.c/.h` (L1), `fake_embedder.c/.h` (L2),
+`test_objects.c` (25 cases) and `test_heap.c` (29 cases, among them two
+seeded 64 KB tortures and deliberate-damage cases that `heap_verify` must
+catch).
+
+Release build for Cortex-M4 at `-Os`: 4,052 bytes of `.text`, 436 of `.bss`.
+Nothing carried over from the Ruffus copy except `obj_handler.h`'s status
+enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 
 ### 3.3 Documents
 
@@ -185,8 +201,8 @@ slice takes from Ruffus, as design rather than code, is in 13 §§4 and 6.
 | [14](14_ObjectHandler.md) | ObjectHandler contract, normative; one false claim in §1 — B2 |
 | [15](15_Pack_Time_IL_Transforms.md) | pack-time IL transforms; current |
 | [16](16_Native_Call_Protocol.md) | native call protocol; four items open |
-| [17](17_Threading_Model.md) | threading model; two items open |
-| [18](18_ObjectHandler_Build_Plan.md) | build plan; §12's "Nothing remains open" is stale — B4 |
+| [17](17_Threading_Model.md) | threading model; one item open |
+| [18](18_ObjectHandler_Build_Plan.md) | build plan; D1–D4, OH-1 and OH-2 struck through |
 | 19 | this checklist |
 | [99](99_phase0_work.md) | Phase 0 record; history |
 
@@ -195,10 +211,13 @@ slice takes from Ruffus, as design rather than code, is in 13 §§4 and 6.
 | Doc 18 item | State |
 |---|---|
 | D1 error and failure model | **done** — `obj_handler_status_t`, 14 §9.2 |
-| D2 debug object identity | decided; lands in `objects_types.h` with OH-1 |
-| D3 header isolation and naming | names and location decided (`objects_types.h`, `obj_string`, `source/object_handler/`); the isolated build waits for C1 |
-| D4 old `source/framework/` draft | **done** — deleted |
-| OH-T to OH-6 | not started |
+| D2 debug object identity | **done** — `objects_types.h`, `7ff3a8f`; its stale-id test is in OH-2 |
+| D3 header isolation and naming | **done** — the standalone build passes, `7ff3a8f` |
+| D4 old `source/framework/` draft | **done** — deleted, `745922d` |
+| OH-T | L1, L2 and L7 done; L3, L5 and L6 in part (§4 D) |
+| OH-1 | **done** — `7ff3a8f` |
+| OH-2 | **done** — `1fe5476` |
+| OH-3 to OH-6 | not started |
 
 ---
 
@@ -274,8 +293,9 @@ These either land in the first commit's headers or block OH-1.
   It does not (`heap_t` is defined twice; `flags` and `b_size` are missing).
 - [ ] **B3 — 14 §3.1 against §3.3** on what an `OBJECT_SPACE_CONST` index
   means — a literal-pool index or a byte offset. Settled by D7.
-- [ ] **B4 — 18 §12's "Nothing remains open"** stays untrue until A is
-  closed; reword it to point here.
+- [x] **B4 — 18 §12's "Nothing remains open"** stays untrue until A is
+  closed; reword it to point here. *Done:* A is closed, and §12 now says
+  "nothing remains open before OH-3".
 - [ ] **B5 — Docs 00, 13, 15 and 17**: check them for the same stale points
   as B1 (strings open, tier 2 shipping).
 - [ ] **B6 — 14 §6.6 and 18 OH-5** tell `value.c` to reimplement Ruffus's
@@ -285,10 +305,11 @@ These either land in the first commit's headers or block OH-1.
 
 ### C. Build and code chores
 
-- [ ] **C1 — CMake.** An `object_handler` static library whose include path
+- [x] **C1 — CMake.** An `object_handler` static library whose include path
   is its own directory only; the standalone `-Wall -Wextra -Werror -pedantic`
   build; `enable_testing()` with one test per case; debug and release builds
-  (18 D3, OH-1 item 5, OH-T). Depends on A5; A1 is done.
+  (18 D3, OH-1 item 5, OH-T). *Done* (`7ff3a8f`), with the options
+  `OBJECT_HANDLER_C_STANDARD` and `OBJECT_HANDLER_SANITIZE`.
 - [x] **C2 — D4.** Delete `source/framework/objects.c/.h` and
   `stack.c/.h`: CMake builds only `pool.c` and `critical_section.c` from that
   directory. *Done:* confirmed by the owner and deleted.
@@ -307,22 +328,27 @@ These either land in the first commit's headers or block OH-1.
 - [x] **C6 — `obj_string_split`** moves to the embedder as a native: under
   14 §5.7 it needs the embedder's type id for `string[]`. *Moot:* the copy is
   deleted; the rule moves to OH-5 below.
-- [ ] **C7 — Test harnesses.** The heap and array harnesses of 2026-09-25
+- [x] **C7 — Test harnesses.** The heap and array harnesses of 2026-09-25
   lived only in `/tmp`; OH-T recreates them in `tests/object_handler/`.
+  *Done* for the heap (`1fe5476`); the array cases come with OH-5.
 
 ### D. Build plan slices — doc 18
 
 - [x] **D1** — error and failure model: `obj_handler_status_t` (`e444cb9`).
-- [ ] **D2** — debug object identity, written into `objects_types.h`.
-- [ ] **D3** — header isolation: names and location done; the isolated build
-  needs C1.
-- [x] **D4** — the old `source/framework/` draft: C2.
-- [ ] **OH-T** — test system: `harness.h`, fake embedder, fault injection,
-  replay, CTest (18 §2).
-- [ ] **OH-1** — foundation: types, configuration, spaces, resolution,
-  `obj_handler_init` with the checks of 14 §9.2 (18 §3).
-- [ ] **OH-2** — allocator: new `heap.c`, free list, `heap_release`,
-  `heap_verify`, statistics (18 §4).
+- [x] **D2** — debug object identity, written into `objects_types.h`
+  (`7ff3a8f`).
+- [x] **D3** — header isolation: the standalone build passes (`7ff3a8f`).
+- [x] **D4** — the old `source/framework/` draft: C2 (`745922d`).
+- [ ] **OH-T** — test system (18 §2). Done: `harness.h` and CTest (L1), the
+  fake embedder (L2), one process per case and a dump on failure (L7). In
+  part: `heap_verify` (L3 — `gc_verify` and `stack_verify` come with their
+  slices), fault injection for `on_oom` and corruption (L5), seeded tortures
+  that report seed and operation (L6). Still to do: the oracle (L4, with
+  OH-3), the operation log and `regressions/` (L6), and CI (L8, OH-6).
+- [x] **OH-1** — foundation: types, configuration, spaces, resolution,
+  `obj_handler_init` with the checks of 14 §9.2 (18 §3) — `7ff3a8f`.
+- [x] **OH-2** — allocator: new `heap.c`, free list, `heap_release`,
+  `heap_verify`, statistics (18 §4) — `1fe5476`.
 - [ ] **OH-3** — collector (18 §5). Decide first: D5 rooting-scope API, D6
   `gc_poll` and the safepoint contract, D7 statics slab and literal pool
   (includes B3).
@@ -372,19 +398,36 @@ These either land in the first commit's headers or block OH-1.
 ```bash
 cd /home/wifi/projects/cli_parser
 
-# 1 and 3. Every library file on its own: host and device, C99 and C11 (A5).
+# 1. The three test builds (18 section 0), under build/.
+cmake -S . -B build/oh-debug -DCMAKE_BUILD_TYPE=Debug -DOBJECT_HANDLER_SANITIZE=ON
+cmake -S . -B build/oh-release -DCMAKE_BUILD_TYPE=Release
+cmake -S source/object_handler -B build/oh-standalone
+for b in debug release standalone; do
+  cmake --build build/oh-$b -j && ctest --test-dir build/oh-$b -j8 --output-on-failure
+done
+# One case by name: build/oh-debug/tests/object_handler/test_heap torture_seed_1
+
+# 2. Every library file on its own: host and ARM, C99 and C11, debug and release.
+#    The wrapper line keeps a macro-only header from being an empty unit under -pedantic.
 for cc in gcc "/home/wifi/gcc_toolchain/bin/arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb"; do
   for std in c99 c11; do
-    for f in source/object_handler/*.[ch]; do
-      $cc -std=$std -fsyntax-only -Wall -Wextra -Werror -pedantic \
-        -I source/object_handler -x c "$f" || echo "FAIL: $cc -std=$std $f"
+    for rel in "" -DNDEBUG; do
+      for f in source/object_handler/*.[ch]; do
+        printf '#include "%s"\ntypedef int not_empty;\n' "$(basename "$f")" |
+          $cc -std=$std $rel -fsyntax-only -Wall -Wextra -Werror -pedantic -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -I source/object_handler -x c - ||
+          echo "FAIL: ${cc%% *} $std $rel $f"
+      done
     done
   done
 done
 
-# 2. A harness against the library, one case per process.
-gcc -std=c11 -g -O0 -fsanitize=address,undefined -I source/object_handler \
-  test.c source/object_handler/*.c -o test
+# 3. Device code size, release switches.
+root=$PWD; d=$(mktemp -d)
+(cd "$d" && /home/wifi/gcc_toolchain/bin/arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb \
+   -std=c99 -Os -DNDEBUG -c -I "$root/source/object_handler" "$root"/source/object_handler/*.c &&
+ /home/wifi/gcc_toolchain/bin/arm-none-eabi-size *.o)
+rm -rf "$d"
 ```
 
 ---
@@ -392,6 +435,20 @@ gcc -std=c11 -g -O0 -fsanitize=address,undefined -I source/object_handler \
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-28, second part** — A2–A13 decided in one round, as recommended,
+  and recorded (`b999151`); D4 done (`745922d`). **OH-1 built:** ids in both
+  splits, spaces, checked resolution, the eight init checks, with the
+  harness, the fake embedder and CMake/CTest (`7ff3a8f`). **OH-2 built:**
+  first fit with coalescing, bump top, handle quarantine and generations,
+  guard headers and poisoning in debug, `heap_verify`, `heap_stats`
+  (`1fe5476`). 54 cases pass in the debug (ASan, UBSan), release and
+  standalone builds; every file compiles for Cortex-M4 under C99 and C11; the
+  release library is 4 KB of code. A coalescing bug injected into a copy of
+  `heap.c` was caught by `heap_verify` with a heap dump, and by the torture
+  with its seed. Folded into 14 §11 and 18 §12: the debug handle is 10 bytes,
+  not 12; non-inline accessors check ids in every build; a pinned object is
+  never released; a remainder too small to split cannot occur.
 
 - **2026-09-28** — A1 decided: the new ObjectHandler is written in
   `source/object_handler/` — snake_case, not `objecthandler`; docs 13, 14, 18

@@ -5,10 +5,9 @@ the library is; this says *in what order it gets written, and what proves each
 step*. It is a living document: each slice, once landed, is struck through
 here and its consequences folded back into 14 §11.
 
-Status: **reviewed and settled — ready to start.** Every review item in §12 is
-closed; nothing here is built yet. Progress against this plan, and the
-decisions still to take before OH-1, are tracked in
-[19_Session_Checklist.md](19_Session_Checklist.md).
+Status: **in progress — D1–D4, OH-1 and OH-2 are built** (§0.1). Every
+review item in §12 is closed. Progress, and the decisions each later slice
+needs first, are tracked in [19_Session_Checklist.md](19_Session_Checklist.md).
 
 **Scope rule.** This plan covers ObjectHandler alone — no `cli_exec`, no
 `cli_pack`, no image. The embedder is a ~150-line fake in the test tree, which
@@ -37,13 +36,13 @@ is what makes every item below testable without the rest of the system.
 
 | # | Item | P | Size | Depends on | Done when |
 |---|---|---|---|---|---|
-| D1 | Error and failure model | **P0** | S | — | written into `obj_handler.h` |
-| D2 | Debug object identity (generation) | **P0** | S | — | written into `objects_types.h` |
-| D3 | Header isolation and file naming | **P0** | S | — | standalone build passes |
-| D4 | Disposition of the old `framework/` draft | **P0** | S | — | deleted or fenced off |
-| OH-T | Test system: harness, fake embedder, fault injection, replay, CI | **P1** | L | D3 | §2 acceptance list |
-| OH-1 | Foundation: types, config, spaces, resolution, build | **P1** | M | D1–D4, OH-T L1–L2 | §3 tests |
-| OH-2 | Allocator: `heap.c`, free list, `heap_release`, `heap_verify`, stats | **P2** | L | OH-1 | §4 tests |
+| ~~D1~~ | ~~Error and failure model~~ | **P0** | S | — | done — `e444cb9` |
+| ~~D2~~ | ~~Debug object identity (generation)~~ | **P0** | S | — | done — `7ff3a8f` |
+| ~~D3~~ | ~~Header isolation and file naming~~ | **P0** | S | — | done — `7ff3a8f` |
+| ~~D4~~ | ~~Disposition of the old `framework/` draft~~ | **P0** | S | — | done — `745922d` |
+| OH-T | Test system: harness, fake embedder, fault injection, replay, CI | **P1** | L | D3 | §2 acceptance list — L1, L2, L7 done; L3, L5, L6 in part |
+| ~~OH-1~~ | ~~Foundation: types, config, spaces, resolution, build~~ | **P1** | M | D1–D4, OH-T L1–L2 | done — `7ff3a8f` |
+| ~~OH-2~~ | ~~Allocator: `heap.c`, free list, `heap_release`, `heap_verify`, stats~~ | **P2** | L | OH-1 | done — `1fe5476` |
 | OH-3 | Collector: `gc.c`, roots, scopes, triggers | **P3** | L | OH-2, D5–D7 | §5 tests |
 | OH-4 | Stack: threads, slots, frames | **P4** | M | OH-3 | §6 tests |
 | OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-4, D9 | §7 tests |
@@ -181,7 +180,7 @@ value and nothing can tell them apart; in debug they differ in one byte.
 | `object_id_t` width | 32 bits | 32 bits — *unchanged* |
 | Spaces addressable | 65 536 | 256 (v1 uses 20, and the reserved range ends at `0x00FF`) |
 | Objects per segment | 65 535 | 65 535 — unchanged |
-| `object_handle_t` | 8 bytes | 9 bytes, padded to 12 |
+| `object_handle_t` | 8 bytes | 9 bytes, padded to 10 |
 | Cost per resolution | none | one byte compare |
 
 **What it constrains**, and this is the whole of the "two id formats" worry:
@@ -440,8 +439,10 @@ is why it is early.
 3. **`heap_release(object_id_t)`** — declared in `heap.h`, not hidden behind
    the test build. Its callers are the sweep (OH-3) and the test suite, and it
    exists in this slice so that the allocator is completely exercisable before
-   a collector exists. It is deliberately **absent from `obj_handler.h`**: an
-   embedder never frees, because lifetime is the collector's job (14 §1).
+   a collector exists. It is reachable through `obj_handler.h`, which
+   includes every module header (14 §8), but it is not part of the
+   embedder's API: an embedder never frees, because lifetime is the
+   collector's job (14 §1).
    Address-ordered free-list insert, coalescing the previous and following
    blocks, handle returned to the *tail* of the free list (D2 quarantine).
 4. `heap_verify()` — the invariant checker, and the most valuable single
@@ -475,7 +476,8 @@ every time the payload width changes and gives no second benefit.
 **Done when:**
 
 - split/coalesce unit tests cover: coalesce with previous only, next only,
-  both, neither; exact fit; a remainder too small to split;
+  both, neither; exact fit; a remainder too small to split — which cannot
+  occur, because sizes and the minimum block are both 8;
 - exhaustion: payload full and handles full each end in `on_oom` — the fake's
   `longjmp` — after the collect, a no-op until OH-3, and leave
   `heap_verify()` clean (A10);
@@ -711,7 +713,9 @@ and OH-4, not deferred.
 | Array model (2026-09-25) | **Kept, and cut back to what a CIL array is**: one-dimensional, inline elements, fixed length. The type's refmap describes one element; `array_range_ptr` is the only range check; the header moves to `objects_types.h`. Ruffus's list operations are dropped — 14 §5.7 |
 | Location (2026-09-28) | **`source/object_handler/`, a new implementation**, not patches to the Ruffus copy. `obj_handler.h` moved there; the rest of `ObjectHandler/` was deleted, the originals staying in `ruffusvm/`. Tests in `tests/object_handler/`, CMake target `object_handler` — D3 |
 | Pre-OH-1 decisions (2026-09-28) | [19](19_Session_Checklist.md) A2–A13 and D4, accepted as recommended. Recorded in 14 §§1, 1.1, 3.2, 3.4, 5.2, 7.4, 7.5, 9 and 9.2, and here in D1, D2, §3, §4 and §5 |
+| Coding OH-1 and OH-2 (2026-09-28) | Debug switches default from `NDEBUG`, each overridable with `-D`. `heap_verify` returns 1 or 0 and reports the first fault: release checks order, ranges, accounting and coverage by sums, and `HEAP_DEBUG` adds an exact address walk through the guard headers. A free block that reaches the untouched top rejoins it. The standalone build is `source/object_handler/` configured on its own, which also adds the tests. The per-file recipe compiles each header through a one-line wrapper, since a macro-only header is an empty unit under `-pedantic` |
 
-**Nothing remains open.** D5, D6, D7 and D9 (§9) are scheduled decisions, not
+**Nothing remains open before OH-3:** A1–A13 are settled
+([19 §4](19_Session_Checklist.md)). D5, D6, D7 and D9 (§9) are scheduled decisions, not
 unresolved ones: each is taken at the start of the slice that consumes it,
 with that slice's code in front of us.
