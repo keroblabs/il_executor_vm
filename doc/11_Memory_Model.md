@@ -625,6 +625,10 @@ existing signature decoder and layout pass.
 | Per-type instance size and alignment; element size for array types | per type | `heap_alloc`, `array_create` | layout pass |
 | Escape classification per `box` site | per instruction | scratch vs heap allocation | [15 §4](15_Pack_Time_IL_Transforms.md) |
 
+Every `object_id_t` the layout pass places — field, static or struct
+element — sits at a 4-byte-aligned offset, because a refmap bit describes a
+whole word ([14 §7.5](14_ObjectHandler.md), A11).
+
 The evaluation stack needs **nothing** — it describes itself through
 `stack_slot_t.kind`.
 

@@ -43,6 +43,11 @@ What the library *does* own, and what the embedder must therefore not
 duplicate: object identity, object lifetime, the layout of the heap, the
 layout of the execution stack, and the definition of a frame.
 
+**Concurrency (A2).** The library is not re-entrant and is called from one
+thread only. Doc 17 gives Ruffus CLI one OS thread; any other embedder must
+serialise its calls, and no host callback (§7.5) may call back into the
+library.
+
 ### 1.1 Layout
 
 The decomposition is Ruffus's, kept deliberately: one module per
@@ -79,6 +84,14 @@ which C11 §7.31.13 reserves for `<string.h>` — [18 D3](18_ObjectHandler_Build
 and `<string.h>` only. A CI job builds the directory on its own with
 `-Wall -Wextra -Werror -pedantic` and no include path into `source/` — that
 job is what keeps the boundary honest.
+
+**Compiler baseline (A5).** C99, and the same sources are also built as C11.
+Warnings are `-Wall -Wextra -Werror -pedantic -Wshadow -Wstrict-prototypes
+-Wmissing-prototypes`. `OBJECT_LIKELY` and `OBJECT_UNLIKELY` live in
+`objects_types.h` — module-prefixed, so they cannot collide with an
+embedder's `LIKELY` — and use `__builtin_expect` on GCC and Clang, a plain
+expression elsewhere. Headers are wrapped in `extern "C"`, and every file has
+LF line endings.
 
 ### 1.2 Naming
 
@@ -303,10 +316,10 @@ typedef struct {
 
 enum {                                      /* flags */
     OBJECT_H_INUSE   = 0x01,
-    OBJECT_H_PINNED  = 0x02,                /* must not move                  */
     OBJECT_H_MARK    = 0x04,                /* GC mark bit — see §7.2         */
     OBJECT_H_SCANNED = 0x08,                /* grey→black, on worklist overflow */
     OBJECT_H_HASREFS = 0x10,                /* payload contains object ids    */
+    OBJECT_H_PINNED  = 0xE0,                /* pin count, 0–7; nonzero: must not move */
 };
 
 enum {                                      /* object kind — what the block is */
@@ -314,6 +327,11 @@ enum {                                      /* object kind — what the block is
     OBJECT_K_BOX, OBJECT_K_RAW,
 };
 ```
+
+**A pin is counted, not flagged (A4).** `objects_pin` adds one to the count
+held in `OBJECT_H_PINNED` and `objects_unpin` takes one away, so a `fixed`
+block and a native call can pin the same buffer. An eighth nested pin, or an
+unpin at zero, goes to `on_corrupt`. Bit `0x02` is free.
 
 `offset` and `size` are 16 bits because the v1 payload is (§2.3), not because
 anything depends on it: both are private to `heap.c`, and widening them to 32
@@ -350,10 +368,10 @@ static inline void * objects_ptr(object_id_t id)
 {
     const object_space_t * sp = &object_spaces[OBJECT_SPACE(id)];
 
-    if (LIKELY(sp->handles != NULL))                    /* heap segment      */
+    if (OBJECT_LIKELY(sp->handles != NULL))             /* heap segment      */
         return sp->base + sp->handles[OBJECT_INDEX(id)].offset;
 
-    if (LIKELY(sp->base != NULL))                       /* flat space        */
+    if (OBJECT_LIKELY(sp->base != NULL))                /* flat space        */
         return sp->base + OBJECT_INDEX(id);
 
     return objects_resolve_indirect(id);                /* native descriptor */
@@ -378,9 +396,10 @@ spaces — `OBJECT_GEN(id) == handles[i].gen`.
 
 The last of those is the one that earns its keep. The first three catch a
 *malformed* id; only the generation catches a **stale** one, which otherwise
-resolves to a different, valid, live object and corrupts it in silence. The
-sweep bumps the generation of every handle it frees, and freed handles are
-returned to the tail of the free list so that reuse is as late as possible.
+resolves to a different, valid, live object and corrupts it in silence.
+`heap_release` — which the sweep calls — bumps the generation of every handle
+it frees (A8), and freed handles are returned to the tail of the free list so
+that reuse is as late as possible.
 
 It is on by default in host builds. The release path above is what ships to
 the device — but note §0.2 of
@@ -470,13 +489,17 @@ lifting the cap (§2.3.1) is a change to `heap.c` and not to every call site in
 every embedder. The only behaviour the extra width adds in v1 is that an
 oversized request fails cleanly at step 1 instead of truncating.
 
-1. Round `bytes` up to 8; reject anything larger than the segment payload.
+1. Round `bytes` up to 8. A request larger than the segment payload can never
+   fit, and returns `OBJECT_NULL` — the only failure that does (A10).
 2. **Size-class cache** — *deferred* (§6.3: it is an alternative to
    compaction, not a layer under it). v1 falls through to step 3.
 3. Free list — first fit, address-ordered.
 4. Bump the segment top.
-5. On failure: collect, retry once; then try the next segment; then `on_oom`.
-6. Take a handle from the handle free list; on exhaustion, collect and retry.
+5. On failure: collect, retry once; then try the next segment; then `on_oom`,
+   which does not return.
+6. Take a handle from the handle free list; on exhaustion, collect, retry
+   once, then `on_oom`. The handle is secured before the payload is carved,
+   so an `on_oom` that `longjmp`s never strands a block.
 7. **Zero the payload.** Required by the CLI and by the collector — an
    unzeroed object-id field would be marked as a garbage handle index.
 
@@ -1073,13 +1096,22 @@ So the threshold can be wrong, or switched off entirely, without being fatal.
 | Every thread's value stack | walk threads, then slots | self-describing via `stack_slot_t.kind` |
 | Every thread's frame scratch *(tier 2 — §6.3; absent in v1)* | walk the scratch arena | scratch object refmaps |
 | Statics slab | walk the slab | statics reference bitmap |
-| Interned literals | walk the literal handle table | all entries are object ids |
+| Interned literals | walk `literals[]` (§9, A6) | all entries are object ids |
 | Native scopes | walk the scope chain | every entry is an object id |
 
 "Every thread's" rather than "the thread's" — see
 [17_Threading_Model.md](17_Threading_Model.md). Green threads make this
 enumeration *easier*, not harder: all of them are parked at their own
 safepoints by construction.
+
+**How `gc.c` reaches the stacks (A7).** `stack.c` registers one root-scan
+function with `gc.c` when it initialises; `gc.c` never includes `stack.h`.
+The collector (OH-3) is therefore built and tested before the stack (OH-4),
+against a fake scanner.
+
+**No `[ThreadStatic]` in v1 (A12).** `cli_pack` rejects the attribute and
+names the field, so the statics slab stays one root shared by every thread
+([17 §11](17_Threading_Model.md)).
 
 ### 7.5 Host interface
 
@@ -1101,6 +1133,20 @@ typedef struct {
 Three callbacks, all required (§9.2). Everything else the collector needs is
 in the handle or, for an array, in its payload header (§5.7), which is why
 there is no `array_shape` callback.
+
+**What the collector scans, per kind (A3):**
+
+| Kind | Scanned |
+|---|---|
+| `OBJECT_K_OBJECT` | by the type's refmap |
+| `OBJECT_K_BOX` | by the boxed value type's refmap |
+| `OBJECT_K_ARRAY` | by the element refmap, `count` times — §5.7 |
+| `OBJECT_K_STRING`, `OBJECT_K_RAW` | never: `heap_alloc` does not set `OBJECT_H_HASREFS` for them |
+
+**Every id in a payload is 4-byte aligned (A11).** Refmap bit *i* marks the
+word at offset 4·*i*, so an id anywhere else could not be described.
+`cli_pack`'s layout pass guarantees it for fields, statics and struct
+elements ([11 §9](11_Memory_Model.md)).
 
 ---
 
@@ -1209,6 +1255,8 @@ typedef struct {
     const uint8_t * const_base;     /* immutable image, may be flash      */
     uint32_t        const_count;
 
+    object_id_t   * literals;       uint32_t literal_count;  /* intern table, a root — A6 */
+
     uint8_t       * stack_mem;      uint32_t stack_size;     /* all threads */
 
     uint16_t        worklist_len;   uint16_t * worklist;
@@ -1252,9 +1300,12 @@ the field is debug-only.
 
 `obj_handler_init` is the only function that returns a status. Every other
 failure follows [18 D1](18_ObjectHandler_Build_Plan.md): allocation returns
-`OBJECT_NULL`, `on_oom` does not return, and an embedder bug goes to
-`on_corrupt`. Init is the exception because it runs before there is an
-`on_corrupt` to trust — a NULL `on_corrupt` is one of the things it rejects.
+`OBJECT_NULL` only for a request that can never fit, `on_oom` does not
+return, and an embedder bug goes to `on_corrupt` — after which the library
+returns a safe value and carries on, in every build. Aborting is the
+embedder's choice, made inside `on_corrupt` (A13). Init is the exception
+because it runs before there is an `on_corrupt` to trust — a NULL
+`on_corrupt` is one of the things it rejects.
 
 **Rule: until `obj_handler_init` returns `OBJ_HANDLER_OK`, errors are
 returned; after that, an embedder bug goes to `on_corrupt`.** This is also why
@@ -1340,6 +1391,7 @@ The limits behind the codes:
 | String representation | **UTF-8**, identical on MCU and host. `cli_pack` converts ASCII literals and **errors** on any code point ≥ U+0080 or any unpaired surrogate, unless `--allow-non-ascii` is given — §5.6 |
 | Init failure reporting | **`obj_handler_status_t`**, returned by `obj_handler_init` only — one code per thing the embedder has to fix, appended per slice. Before init errors are returned; after it, embedder bugs go to `on_corrupt` — §9.2 |
 | Array model | **One-dimensional arrays of inline elements** — primitives, ids or structs — with a fixed length. The type's refmap describes one element; `array_range_ptr` is the only range check — §5.7 |
+| Pre-OH-1 review (2026-09-28) | [19](19_Session_Checklist.md) A2–A13, accepted as recommended: one calling thread (§1); C99 baseline (§1.1); a pin count (§3.2); `heap_release` bumps the generation (§3.4); `OBJECT_NULL` only for a request that can never fit (§5.2); stack roots through a registered scanner, no `[ThreadStatic]` (§7.4); scan rule per kind, 4-aligned ids (§7.5); the intern table in the config (§9); `on_corrupt` always returns (§9.2) |
 
 **Still open:**
 

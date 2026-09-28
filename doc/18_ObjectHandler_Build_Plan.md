@@ -86,10 +86,10 @@ Every function had an unspecified failure path. Decision:
 
 | Case | Behaviour |
 |---|---|
-| Allocation cannot be satisfied | return `OBJECT_NULL`; the caller checks |
+| Allocation cannot be satisfied | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, then `on_oom` — A10, 14 §5.2 |
 | `on_oom` | **must not return** — it aborts, `longjmp`s, or resets the board. The library has no way to continue and must not pretend it has |
 | `obj_handler_init` | returns `obj_handler_status_t` — one code per thing the embedder has to fix, listed in 14 §9.2 (not a bare `int`) |
-| Detected corruption | `on_corrupt(where, id)` then, in debug, abort; in release, return a safe value and keep going |
+| Detected corruption | `on_corrupt(where, id)`, then return a safe value and keep going, in every build. Aborting is the embedder's choice inside `on_corrupt` (A13), which is what lets §2.1's recording fake run negative tests in a debug build |
 | Bad argument from the embedder (null id, out-of-range index) | `on_corrupt` — it is a bug in the embedder, not a run-time condition |
 
 **The boundary:** until `obj_handler_init` returns `OBJ_HANDLER_OK`, errors
@@ -167,7 +167,7 @@ tag has bits to spare.
 | Step | What happens | Debug id | Release id |
 |---|---|---|---|
 | 1 | `objects_create` takes handle 7, whose generation is 3 | `0x0003_0007` | `0x0000_0007` |
-| 2 | the object dies; the sweep frees handle 7 and bumps its generation to 4 | — | — |
+| 2 | the object dies; `heap_release`, called by the sweep, frees handle 7 and bumps its generation to 4 (A8) | — | — |
 | 3 | a later allocation is handed handle 7 again | `0x0004_0007` | `0x0000_0007` |
 | 4 | buggy code still holds the id from step 1 and dereferences it | handle 7's generation is 4, the id says 3 → **`on_corrupt` fires at the first use** | byte-identical to step 3's id → **silent corruption, discovered much later and somewhere else** |
 
@@ -409,9 +409,6 @@ initialises from a caller-supplied config and refuses a malformed one.
 **Done when:**
 
 - every space tag round-trips through the id macros, in both splits;
-- a stale id (freed then reused handle) is caught in debug and is *not* caught
-  in release — the same test compiled twice, asserting different outcomes,
-  which is what proves the debug machinery is debug-only;
 - an out-of-range index, an unregistered space and a not-`INUSE` handle each
   call `on_corrupt` exactly once;
 - every `obj_handler_init` precondition has a test that trips it and gets its
@@ -482,8 +479,13 @@ every time the payload width changes and gives no second benefit.
 
 - split/coalesce unit tests cover: coalesce with previous only, next only,
   both, neither; exact fit; a remainder too small to split;
-- exhaustion: payload full and handles full each return `OBJECT_NULL` (no
-  collector exists yet) and leave `heap_verify()` clean;
+- exhaustion: payload full and handles full each end in `on_oom` — the fake's
+  `longjmp` — after the collect, a no-op until OH-3, and leave
+  `heap_verify()` clean (A10);
+- a stale id (freed then reused handle) is caught in debug and is *not* caught
+  in release — the same test compiled twice, asserting different outcomes,
+  which is what proves the debug machinery is debug-only (moved from OH-1,
+  A9);
 - seeded torture: random alloc/release, `heap_verify()` after every operation
   for the first 10 000 and periodically after; the run ends by releasing
   everything and asserting the payload is one free block of full size;
@@ -499,7 +501,9 @@ test runs once with a payload of the maximum size.
 
 **Goal:** tricolour mark-sweep over the handle table, with roots.
 
-**Files:** `gc.c/.h`, plus root plumbing in `objects.c`.
+**Files:** `gc.c/.h`, plus root plumbing in `objects.c`. The thread stacks are
+reached through a scan function that `stack.c` registers (A7); until OH-4
+exists, the tests register a fake one.
 
 **Consumes** (decide at the start of this slice, §9): D5 rooting-scope API,
 D6 `gc_poll` and the safepoint contract, D7 statics slab and literal pool.
@@ -709,6 +713,7 @@ and OH-4, not deferred.
 | Init status (2026-09-25) | **`obj_handler_status_t`, returned by `obj_handler_init` only**: eight codes in OH-1, one per thing the embedder has to fix, appended per slice. Errors are returned before init and go to `on_corrupt` after it, so `objects_space_register` is `void`. `HEAP_MAX_PAYLOAD` is 65536 — D1, 14 §9.2 |
 | Array model (2026-09-25) | **Kept, and cut back to what a CIL array is**: one-dimensional, inline elements, fixed length. The type's refmap describes one element; `array_range_ptr` is the only range check; the header moves to `objects_types.h`. Ruffus's list operations are dropped — 14 §5.7 |
 | Location (2026-09-28) | **`source/object_handler/`, a new implementation**, not patches to the Ruffus copy. `obj_handler.h` moved there; the rest of `ObjectHandler/` was deleted, the originals staying in `ruffusvm/`. Tests in `tests/object_handler/`, CMake target `object_handler` — D3 |
+| Pre-OH-1 decisions (2026-09-28) | [19](19_Session_Checklist.md) A2–A13 and D4, accepted as recommended. Recorded in 14 §§1, 1.1, 3.2, 3.4, 5.2, 7.4, 7.5, 9 and 9.2, and here in D1, D2, §3, §4 and §5 |
 
 **Nothing remains open.** D5, D6, D7 and D9 (§9) are scheduled decisions, not
 unresolved ones: each is taken at the start of the slice that consumes it,

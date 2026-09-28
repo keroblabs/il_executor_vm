@@ -468,6 +468,7 @@ to retrofit. That is the whole reason they are written down now.
 | Slice length | **20 ms, configurable** through `slice_ms` in the image header — §4.3 |
 | Monitor table sizing | **Fixed array**, sized by `cli_pack` from the reachable `lock` sites, never grown from the heap, `OutOfMemoryException` on exhaustion — §6.2 |
 | Timer-task threads | **Dropped.** Ruffus's `THREAD_MODE_TIMERTASK` has no .NET equivalent and is not added; periodic work is a managed loop with `Thread.Sleep`, or the ISR queue plus a dispatcher thread — §9 |
+| Thread-local storage (2026-09-28) | **Not in v1.** `cli_pack` rejects `[ThreadStatic]` and names the field; `ThreadLocal<T>`, built on it, goes with it. The statics slab stays one root shared by every thread — [14 §7.4](14_ObjectHandler.md) |
 
 **Still open:**
 
@@ -476,8 +477,3 @@ to retrofit. That is the whole reason they are written down now.
    and is simple here (set a flag, wake the thread, throw at its next
    safepoint). Confirm the exception model with
    [05_Exception_Handling.md](00_Introduction.md) when it is written.
-2. **Thread-local storage** — `[ThreadStatic]` and `ThreadLocal<T>` need a
-   per-thread slice of the statics slab rather than one shared slab
-   ([11 §3.1](11_Memory_Model.md)). Cheap to add, but it changes a root
-   enumeration, so decide before the collector is written if it is wanted at
-   all.

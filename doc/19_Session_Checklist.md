@@ -217,47 +217,45 @@ These either land in the first commit's headers or block OH-1.
   `obj_handler.h` carried over; the rest of the Ruffus copy is deleted
   (§3.2). Tests go in `tests/object_handler/`; the CMake target is
   `object_handler`. *Recorded in:* 18 D3 and §12, 14 §1.1, 13 §4.
-- [ ] **A2 — Concurrency contract.** State that ObjectHandler is not
+- [x] **A2 — Concurrency contract.** State that ObjectHandler is not
   re-entrant and is called from one thread only; doc 17 guarantees one OS
-  thread, but nothing tells a third-party embedder. *Record in:* 14 §1.
-- [ ] **A3 — Scan rule for the remaining kinds.** How the collector treats
+  thread, but nothing tells a third-party embedder. *Recorded in:* 14 §1.
+- [x] **A3 — Scan rule for the remaining kinds.** How the collector treats
   `OBJECT_K_STRING`, `OBJECT_K_BOX` and `OBJECT_K_RAW`; objects and arrays
-  are done (14 §7.5, §5.7). *Likely:* strings and raw blocks never scanned,
-  a box scanned with its value type's refmap. *Record in:* 14 §7.
-- [ ] **A4 — Pin depth.** One `OBJECT_H_PINNED` bit cannot express two
-  overlapping pins: the first unpin clears a pin still held. A counter in the
-  handle, or "pins never nest" with a debug assertion. *Record in:* 14 §3.2
-  and §5.3.
-- [ ] **A5 — Compiler baseline.** Define `LIKELY`/`UNLIKELY` with a fallback
-  for non-GCC compilers — 14 §3.3 and 17 §4.2 use them, nothing defines them —
-  and pin the C standard (C99 or C11) and the warning flags. Pick one line
-  ending for `source/object_handler/` as well: `obj_handler.h` came from
-  Ruffus as CRLF, and new files will be LF. *Record in:* 14 §1.1, 18 OH-1,
-  §2.4 here.
-- [ ] **A6 — Reserve the literal-table fields.** The interned-literal table
-  is a root (14 §7.4) with no field in `obj_handler_config_t` (14 §9). The
-  struct is the embedder's compile-time contract and freezes in OH-1; its
-  layout can follow with D7 and D9. *Record in:* 14 §9.
-- [ ] **A7 — Collector ↔ stack seam.** How `gc.c` (OH-3) walks the thread
-  stacks that `stack.c` builds in OH-4: a list head owned by `gc.c`, or a
-  root-provider callback. *Record in:* 14 §7.4, 18 §5.
-- [ ] **A8 — Who bumps a handle's generation.** 14 §3.4 and 18 §5 say the
-  sweep; but `heap_release` is what frees a handle, and it runs in OH-2 before
-  any sweep exists. *Recommended:* `heap_release`. *Record in:* 18 D2,
-  14 §3.4.
-- [ ] **A9 — OH-1's stale-id test.** It needs `heap_alloc` and
-  `heap_release`, which arrive in OH-2. Move the test to OH-2, or hand-build a
-  handle table in OH-1. *Record in:* 18 §3.
-- [ ] **A10 — What `heap_alloc` does when memory runs out.** 18 D1 says it
-  returns `OBJECT_NULL`; 14 §5.2 step 5 says it ends by calling `on_oom`,
-  which never returns. Pick one — for example `OBJECT_NULL` only for a request
-  that can never fit, `on_oom` otherwise. *Record in:* 14 §5.2, 18 D1.
-- [ ] **A11 — Id alignment in every payload.** Refmaps work in whole words,
-  so every `object_id_t` in any payload must be 4-byte aligned; only array
-  elements say so (14 §5.7). *Record in:* 14 §7.5, 11 §9.
-- [ ] **A12 — `[ThreadStatic]`, yes or no.** Decide before OH-3: it gives
-  each thread a slice of the statics slab and changes the root list
-  (17 §11). *Record in:* 17 §11, 14 §7.4.
+  are done (14 §7.5, §5.7). *Decided:* strings and raw blocks never scanned,
+  a box scanned with its value type's refmap. *Recorded in:* 14 §7.5.
+- [x] **A4 — Pin depth.** One `OBJECT_H_PINNED` bit cannot express two
+  overlapping pins: the first unpin clears a pin still held. *Decided:* a
+  count, 0–7, in the three spare flag bits; past 7 or below 0 goes to
+  `on_corrupt`. *Recorded in:* 14 §3.2.
+- [x] **A5 — Compiler baseline.** *Decided:* C99, also built as C11; the
+  14 §1.1 flags plus `-Wshadow -Wstrict-prototypes -Wmissing-prototypes`;
+  `OBJECT_LIKELY`/`OBJECT_UNLIKELY`; `extern "C"` in headers; LF line
+  endings, `obj_handler.h` converted. *Recorded in:* 14 §1.1.
+- [x] **A6 — Reserve the literal-table fields.** The interned-literal table
+  is a root (14 §7.4) with no field in `obj_handler_config_t` (14 §9).
+  *Decided:* `object_id_t * literals` and `uint32_t literal_count`.
+  *Recorded in:* 14 §9.
+- [x] **A7 — Collector ↔ stack seam.** *Decided:* `stack.c` registers one
+  root-scan function with `gc.c`, which never includes `stack.h`, so OH-3 is
+  testable before OH-4. *Recorded in:* 14 §7.4, 18 §5.
+- [x] **A8 — Who bumps a handle's generation.** *Decided:* `heap_release`,
+  which the sweep calls. *Recorded in:* 18 D2, 14 §3.4.
+- [x] **A9 — OH-1's stale-id test.** *Decided:* it moves to OH-2, where
+  `heap_alloc` and `heap_release` exist. *Recorded in:* 18 §3, §4.
+- [x] **A10 — What `heap_alloc` does when memory runs out.** *Decided:*
+  `OBJECT_NULL` only for a request that can never fit; otherwise collect,
+  retry once, then `on_oom`. *Recorded in:* 14 §5.2, 18 D1.
+- [x] **A11 — Id alignment in every payload.** *Decided:* every
+  `object_id_t` in any payload is 4-byte aligned, an embedder layout rule.
+  *Recorded in:* 14 §7.5, 11 §9.
+- [x] **A12 — `[ThreadStatic]`, yes or no.** *Decided:* no in v1; `cli_pack`
+  rejects it and names the field. *Recorded in:* 17 §11, 14 §7.4.
+- [x] **A13 — `on_corrupt` always returns.** 18 D1 had the library abort
+  after `on_corrupt` in debug, which stops the recording fake of 18 §2.1
+  from running a negative test to completion. *Decided:* a safe value is
+  returned in every build; aborting is the embedder's choice inside
+  `on_corrupt`. *Recorded in:* 18 D1, 14 §9.2.
 
 ### B. Documentation cleanup
 
