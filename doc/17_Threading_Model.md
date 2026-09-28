@@ -39,11 +39,13 @@ view it is preemptive — no `yield` call is required and a tight loop will be
 interrupted. From the VM's point of view it is cooperative — the switch
 happens at a point the executor chose.
 
-That thread belongs to one application. **Several applications run as
-several OS threads, one each, sharing nothing that changes**: each has its
-own ObjectHandler instance, scheduler, run queue and interrupt queue, and no
-object id crosses from one to another
-([14 §1](14_ObjectHandler.md)). Everything below describes one application.
+**An application is one CLI binary** — the program's DLL, which `cli_pack`
+packs with what it references into one image — **and it runs on one OS
+thread.** Its managed threads, `System.Threading.Thread` included, are the
+green threads this document describes: the VM creates and schedules them, and
+none of them is an OS thread. Ruffus CLI runs one application; running
+several at once is not a use case. Interrupts and peripheral callbacks reach
+the application only through its queue (§9).
 
 ---
 
@@ -213,7 +215,7 @@ static void sched_at_safepoint(exec_thread_t * t)
 {
     exec_preempt = 0;
     t->ctx.ip = ip;  t->ctx.sp = sp;      /* publish the cached registers */
-    if (oh->gc_requested) gc_collect(oh); /* §5; oh is this application's */
+    if (oh->gc_requested) gc_collect(oh); /* §5; oh: the application's instance */
     wake_sleepers(now_ms());
     if (t->state == EXEC_T_RUNNING) t->state = EXEC_T_READY;
     current = sched_pick();
@@ -257,8 +259,7 @@ at all (§3). The only obligation this document adds is that a thread's `sp`
 must be published before it parks — which §4.5 does unconditionally.
 
 **Corollary, recorded for the day it matters:** all of this holds because
-each application has exactly one OS thread and shares no objects with
-another. Real parallelism inside one application would reintroduce
+the application has exactly one OS thread. Real parallelism would reintroduce
 suspension, atomics, a write barrier with teeth, and `volatile.`
 ([15 §6](15_Pack_Time_IL_Transforms.md)). The image records
 `CAP_SINGLE_OS_THREAD` so an image packed under these assumptions cannot be

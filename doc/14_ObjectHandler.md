@@ -43,17 +43,18 @@ What the library *does* own, and what the embedder must therefore not
 duplicate: object identity, object lifetime, the layout of the heap, the
 layout of the execution stack, and the definition of a frame.
 
-**Instances and concurrency (A2, I1–I4).** All library state lives in an
-`obj_handler_t` that the embedder provides, one per application: the space
-table, the heap segments, where the constants are, the host callbacks. The
-library keeps no mutable globals, and every call takes its instance first
-(§8). An instance is not re-entrant and is used by one thread at a time;
-different instances may run at the same time on different threads, because
-they share nothing that changes. Doc 17 gives each application one OS
-thread. An object id means nothing outside its instance, so applications
-exchange copied values, never ids. No host callback (§7.5) may call back
-into the library. Locks for what applications do share — peripherals,
-the file system — belong to the native and board layer (I5).
+**Application, threads and the instance (A2, A14).** An application is one
+CLI binary, packed into one image, and it runs on one OS thread; its managed
+threads are green threads the VM schedules on that thread
+([17 §1](17_Threading_Model.md)). Ruffus CLI runs one application, and
+running several at once is not a use case. The library's state for the
+application lives in an `obj_handler_t` the embedder provides — the space
+table, the heap segments, where the constants are, the host callbacks — and
+every call takes it first (§8). That is for the reason §8 gives against
+hidden state, not to run several applications. The instance is not
+re-entrant and is used only from the application's thread; interrupts and
+peripheral callbacks reach the application through its queue (17 §9), never
+through the library. No host callback (§7.5) may call back into the library.
 
 ### 1.1 Layout
 
@@ -1216,10 +1217,10 @@ typedef struct {
 ```
 
 Three callbacks, all required (§9.2). Each receives the instance that calls
-it, so an embedder running several applications knows whose type table to
-read and which application to stop (I2). Everything else the collector needs is
-in the handle or, for an array, in its payload header (§5.7), which is why
-there is no `array_shape` callback.
+it, so the embedder finds its own state from it — by embedding the
+`obj_handler_t` in its application record, say — without a global (I2).
+Everything else the collector needs is in the handle or, for an array, in its
+payload header (§5.7), which is why there is no `array_shape` callback.
 
 **What the collector scans, per kind (A3):**
 
@@ -1326,9 +1327,9 @@ embedder question, not a heap question.
 **Every call takes its instance first, and every per-thread stack call its
 `stack_thread_t *` (I2).** A thread belongs to the instance that created it,
 so the per-thread calls need nothing more. Ruffus reaches both through hidden
-globals — `app_instance`, switched per application, and
+globals — `app_instance`, switched between applications, and
 `instance_get_current()` inside every stack accessor — which costs a load on
-the hottest path in the VM and gives every thread the same pointer. Both are
+the hottest path in the VM. Both are
 already in the interpreter's hands and are passed; a native reaches the
 instance through the `exec_thread_t *` its thunk receives
 ([16](16_Native_Call_Protocol.md)). Measured on Cortex-M4 at `-O2`,
@@ -1378,10 +1379,10 @@ An MCU build declares these as `static` arrays and performs no dynamic
 allocation before `main`. A host build `mmap`s the image and `malloc`s the
 rest once. Neither path is inside the library.
 
-**The instance is one more region (I1).** The embedder declares one
-`obj_handler_t` per application — `static obj_handler_t app_oh;` on an MCU,
-zeroed as static storage is — and passes it to `obj_handler_init` with that
-application's config. Its fields are the library's; the embedder only
+**The instance is one more region (I1).** The embedder declares the
+application's `obj_handler_t` — `static obj_handler_t app_oh;` on an MCU,
+zeroed as static storage is — and passes it to `obj_handler_init` with the
+config. Its fields are the library's; the embedder only
 allocates it. It is 444 bytes on Cortex-M4 with the v1 profile, and
 `obj_handler_shutdown` zeroes it again.
 
@@ -1480,7 +1481,7 @@ The limits behind the codes:
 | `object_t` as `uint16_t` | **widened** to `object_id_t` |
 | Boxed primitives on the stack (`stack.h`, `value_type.c`) | **rejected** — §6.1 |
 | `instance_get_current()` inside stack accessors | **rejected** — thread passed explicitly |
-| `app_instance`, one global pointer switched per application | **replaced** — an `obj_handler_t` per application, passed to every call — §1, §8 |
+| `app_instance`, one global pointer switched between applications | **replaced** — one application, whose `obj_handler_t` is passed to every call — §1, §8 |
 | Heap ≤ 64 KB | **kept as the v1 profile**, per segment; the id abstracts it — §2.3.1 |
 | Arrays as growable lists (`array_insert`, `array_delete`, in-place resize) | **rejected** — CIL arrays have a fixed length; `List<T>` grows in managed code — §5.7 |
 | Element size re-derived from a mode byte (`T_ARRAY + mode`, `T_DATA`) | **replaced** — `elem_size` in the header, element layout from the type's refmap — §5.7 |
@@ -1515,7 +1516,7 @@ The limits behind the codes:
 | Statics and constants (D7, 2026-09-28) | Statics: a flat space, bytes 0–7 reserved, one refmap bit per word, filled by the embedder, never holding image ids. Constants: an indirect space over a table of 12-byte entries in the image, immutable, never collected, never holding an id. Literals are constants, so `obj_string_intern` allocates nothing; this supersedes A6. B3 settled: a `CONST` index selects a table entry. `E_STATICS` and `E_CONST` — §3.5 |
 | Coding D7 (2026-09-28) | Every reader goes through one library-internal view, `objects_info`, which answers from a heap handle or a constant entry alike. A constant id with a non-zero generation is refused in debug. Init checks the statics before the constants, in enum order: the slab 8-aligned, 16 to 65536 bytes, a multiple of 8, words 0 and 1 unmarked; the table 8-aligned, at most 65536 entries, `const_size` covering the entries. `objects_space_register` now accepts only `OBJECT_SPACE_NATIVE` |
 | Coding OH-5 (2026-09-28) | `array_create` rejects `count` above 65535, and a `count × elem_size` that cannot fit, before multiplying. `array_copy` sends each id of a reference array through `objects_write_ref`, in overlap-safe order; other elements move by `memmove`, struct ids included (item 3 below). An out-of-range `array_element_byref` has `id` `OBJECT_NULL`. `value_unbox` requires a live box of exactly the size asked. `objects_clone` keeps `OBJECT_H_ASCII` |
-| Instances (I1–I6, 2026-09-28) | The owner's model: one application is one thread, and several applications are several threads that share nothing. **All library state moved into `obj_handler_t`**, one per application, which every call takes first and every host callback receives; A2 now holds per instance. Ids never leave their instance; locks for shared peripherals live in the native and board layer. Built before OH-3 and OH-4 — §1, §7.5, §8, §9 |
+| Application and instance (A14, 2026-09-28) | The owner's model: an application is one CLI binary, packed into one image and run on one OS thread; its managed threads are green threads the VM schedules; running several applications at once is not a use case. **All library state is in `obj_handler_t`**, which every call takes first and every host callback receives, so the library keeps no hidden globals (§8). Built before OH-3 and OH-4 — §1, §7.5, §8, §9 |
 
 **Still open:**
 
