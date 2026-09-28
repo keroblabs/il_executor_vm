@@ -12,7 +12,7 @@ static const object_handle_t * handle_of(object_id_t id)
 
 static object_id_t make_array(uint16_t type, uint16_t elem_size, uint32_t count)
 {
-    object_id_t id = array_create(type, elem_size, count);
+    object_id_t id = array_create(&fake_oh, type, elem_size, count);
 
     CHECK(id != OBJECT_NULL);
     return id;
@@ -20,16 +20,16 @@ static object_id_t make_array(uint16_t type, uint16_t elem_size, uint32_t count)
 
 static void fill_ints(object_id_t a)
 {
-    int32_t * e = array_range_ptr(a, 0, array_length(a));
+    int32_t * e = array_range_ptr(&fake_oh, a, 0, array_length(&fake_oh, a));
     uint32_t i;
 
-    for (i = 0; i < array_length(a); i++)
+    for (i = 0; i < array_length(&fake_oh, a); i++)
         e[i] = (int32_t)i;
 }
 
 static void expect_ints(object_id_t a, const int32_t * want, uint32_t n)
 {
-    const int32_t * e = array_range_ptr(a, 0, n);
+    const int32_t * e = array_range_ptr(&fake_oh, a, 0, n);
     uint32_t i;
 
     CHECK(e != NULL);
@@ -48,17 +48,17 @@ TEST_CASE(array_create_writes_the_header)
 
     fake_init(PAYLOAD, HANDLES);
     a = make_array(FAKE_T_DATA, 1, 10);
-    hdr = objects_ptr(a);
+    hdr = objects_ptr(&fake_oh, a);
     CHECK_EQ(hdr->count, 10);
     CHECK_EQ(hdr->elem_size, 1);
-    CHECK_EQ(array_length(a), 10);
-    CHECK_EQ(objects_kind_of(a), OBJECT_K_ARRAY);
-    CHECK_EQ(objects_size_of(a), sizeof(array_header_t) + 10);
+    CHECK_EQ(array_length(&fake_oh, a), 10);
+    CHECK_EQ(objects_kind_of(&fake_oh, a), OBJECT_K_ARRAY);
+    CHECK_EQ(objects_size_of(&fake_oh, a), sizeof(array_header_t) + 10);
     CHECK(!(handle_of(a)->flags & OBJECT_H_HASREFS));      /* a byte[] is never scanned */
-    p = array_range_ptr(a, 0, 10);
+    p = array_range_ptr(&fake_oh, a, 0, 10);
     for (i = 0; i < 10; i++)
         CHECK_EQ(p[i], 0);
-    CHECK(heap_verify());
+    CHECK(heap_verify(&fake_oh));
 }
 
 TEST_CASE(array_hasrefs_follows_the_element_refmap)
@@ -75,11 +75,11 @@ TEST_CASE(array_zero_length)
 
     fake_init(PAYLOAD, HANDLES);
     a = make_array(FAKE_T_DATA, 4, 0);
-    CHECK_EQ(array_length(a), 0);
-    CHECK_EQ(objects_size_of(a), sizeof(array_header_t));
-    CHECK(array_range_ptr(a, 0, 0) != NULL);
-    CHECK(array_element_ptr(a, 0) == NULL);
-    CHECK(array_element_byref(a, 0).id == OBJECT_NULL);
+    CHECK_EQ(array_length(&fake_oh, a), 0);
+    CHECK_EQ(objects_size_of(&fake_oh, a), sizeof(array_header_t));
+    CHECK(array_range_ptr(&fake_oh, a, 0, 0) != NULL);
+    CHECK(array_element_ptr(&fake_oh, a, 0) == NULL);
+    CHECK(array_element_byref(&fake_oh, a, 0).id == OBJECT_NULL);
     CHECK_EQ(fake_corrupt_count, 0);
 }
 
@@ -89,16 +89,16 @@ TEST_CASE(array_range_check_is_in_elements)
 
     fake_init(PAYLOAD, HANDLES);
     a = make_array(FAKE_T_DATA, 4, 5);
-    CHECK(array_range_ptr(a, 0, 5) != NULL);
-    CHECK(array_range_ptr(a, 5, 0) != NULL);
-    CHECK(array_range_ptr(a, 4, 1) != NULL);
-    CHECK(array_range_ptr(a, 5, 1) == NULL);
-    CHECK(array_range_ptr(a, 0, 6) == NULL);
-    CHECK(array_range_ptr(a, 4, 2) == NULL);
-    CHECK(array_range_ptr(a, 0xFFFFFFFFu, 1) == NULL);
-    CHECK(array_range_ptr(a, 1, 0xFFFFFFFFu) == NULL);     /* index + count wraps */
-    CHECK(array_element_ptr(a, 5) == NULL);
-    CHECK(array_element_ptr(a, 0xFFFFFFFFu) == NULL);
+    CHECK(array_range_ptr(&fake_oh, a, 0, 5) != NULL);
+    CHECK(array_range_ptr(&fake_oh, a, 5, 0) != NULL);
+    CHECK(array_range_ptr(&fake_oh, a, 4, 1) != NULL);
+    CHECK(array_range_ptr(&fake_oh, a, 5, 1) == NULL);
+    CHECK(array_range_ptr(&fake_oh, a, 0, 6) == NULL);
+    CHECK(array_range_ptr(&fake_oh, a, 4, 2) == NULL);
+    CHECK(array_range_ptr(&fake_oh, a, 0xFFFFFFFFu, 1) == NULL);
+    CHECK(array_range_ptr(&fake_oh, a, 1, 0xFFFFFFFFu) == NULL);   /* index + count wraps */
+    CHECK(array_element_ptr(&fake_oh, a, 5) == NULL);
+    CHECK(array_element_ptr(&fake_oh, a, 0xFFFFFFFFu) == NULL);
     CHECK_EQ(fake_corrupt_count, 0);                        /* the program's error, not the embedder's */
 }
 
@@ -107,18 +107,18 @@ TEST_CASE(array_create_rejects_what_never_fits)
     heap_stats_t st;
 
     fake_init(HEAP_MAX_PAYLOAD, HEAP_MAX_PAYLOAD / 32);
-    CHECK(array_create(FAKE_T_DATA, 1, 0x10000u) == OBJECT_NULL);
-    CHECK(array_create(FAKE_T_DATA, 4, 0x40000001u) == OBJECT_NULL);  /* 4 * count wraps to 4 */
-    CHECK(array_create(FAKE_T_DATA, 8, 0xFFFFFFFFu) == OBJECT_NULL);
-    CHECK(array_create(FAKE_T_DATA, 0xFFFF, 2) == OBJECT_NULL);
+    CHECK(array_create(&fake_oh, FAKE_T_DATA, 1, 0x10000u) == OBJECT_NULL);
+    CHECK(array_create(&fake_oh, FAKE_T_DATA, 4, 0x40000001u) == OBJECT_NULL); /* 4 * count wraps */
+    CHECK(array_create(&fake_oh, FAKE_T_DATA, 8, 0xFFFFFFFFu) == OBJECT_NULL);
+    CHECK(array_create(&fake_oh, FAKE_T_DATA, 0xFFFF, 2) == OBJECT_NULL);
     CHECK_EQ(fake_oom_count, 0);
 
     /* The largest byte[] fills the payload exactly. */
     make_array(FAKE_T_DATA, 1, HEAP_MAX_PAYLOAD - HEAP_SENTINEL_BYTES - HEAP_GUARD_BYTES
                                - (uint32_t)sizeof(array_header_t));
-    heap_stats(&st);
+    heap_stats(&fake_oh, &st);
     CHECK_EQ(st.free_bytes, 0);
-    CHECK(heap_verify());
+    CHECK(heap_verify(&fake_oh));
 }
 
 TEST_CASE(array_int64_and_double_elements_are_aligned)
@@ -131,21 +131,21 @@ TEST_CASE(array_int64_and_double_elements_are_aligned)
     a = make_array(FAKE_T_DATA, 8, 7);
     d = make_array(FAKE_T_DATA, 8, 5);
     for (i = 0; i < 7; i++) {
-        int64_t * e = array_element_ptr(a, i);
+        int64_t * e = array_element_ptr(&fake_oh, a, i);
 
         CHECK(((uintptr_t)e & 7u) == 0);
         *e = (int64_t)i * -1234567890123LL;
     }
     for (i = 0; i < 5; i++) {
-        double * e = array_element_ptr(d, i);
+        double * e = array_element_ptr(&fake_oh, d, i);
 
         CHECK(((uintptr_t)e & 7u) == 0);
         *e = i * 0.5 - 3.25;
     }
     for (i = 0; i < 7; i++)
-        CHECK(*(int64_t *)array_element_ptr(a, i) == (int64_t)i * -1234567890123LL);
+        CHECK(*(int64_t *)array_element_ptr(&fake_oh, a, i) == (int64_t)i * -1234567890123LL);
     for (i = 0; i < 5; i++)
-        CHECK(*(double *)array_element_ptr(d, i) == i * 0.5 - 3.25);
+        CHECK(*(double *)array_element_ptr(&fake_oh, d, i) == i * 0.5 - 3.25);
 }
 
 TEST_CASE(array_byref_resolves_like_element_ptr)
@@ -156,13 +156,13 @@ TEST_CASE(array_byref_resolves_like_element_ptr)
     fake_init(PAYLOAD, HANDLES);
     a = make_array(FAKE_T_MIXED, 8, 6);
     for (i = 0; i < 6; i++) {
-        object_byref_t b = array_element_byref(a, i);
+        object_byref_t b = array_element_byref(&fake_oh, a, i);
 
         CHECK(b.id == a);
-        CHECK(objects_byref_ptr(b) == array_element_ptr(a, i));
+        CHECK(objects_byref_ptr(&fake_oh, b) == array_element_ptr(&fake_oh, a, i));
     }
-    CHECK(array_element_byref(a, 6).id == OBJECT_NULL);
-    CHECK(array_element_byref(a, 0xFFFFFFFFu).id == OBJECT_NULL);
+    CHECK(array_element_byref(&fake_oh, a, 6).id == OBJECT_NULL);
+    CHECK(array_element_byref(&fake_oh, a, 0xFFFFFFFFu).id == OBJECT_NULL);
     CHECK_EQ(fake_corrupt_count, 0);
 }
 
@@ -177,13 +177,13 @@ TEST_CASE(array_copy_overlaps_in_both_directions)
     for (k = 0; k < 2; k++) {       /* int[] moves by memmove; object[] through the barrier */
         a = make_array(k == 0 ? FAKE_T_DATA : FAKE_T_NODE, 4, 10);
         fill_ints(a);
-        array_copy(a, 2, a, 0, 5);
+        array_copy(&fake_oh, a, 2, a, 0, 5);
         expect_ints(a, up, 10);
         fill_ints(a);
-        array_copy(a, 0, a, 3, 5);
+        array_copy(&fake_oh, a, 0, a, 3, 5);
         expect_ints(a, down, 10);
     }
-    CHECK(heap_verify());
+    CHECK(heap_verify(&fake_oh));
 }
 
 TEST_CASE(array_copy_between_arrays)
@@ -196,7 +196,7 @@ TEST_CASE(array_copy_between_arrays)
     s = make_array(FAKE_T_DATA, 4, 4);
     fill_ints(s);
     d = make_array(FAKE_T_DATA, 4, 6);
-    array_copy(d, 1, s, 0, 4);
+    array_copy(&fake_oh, d, 1, s, 0, 4);
     expect_ints(d, want, 6);
 }
 
@@ -208,7 +208,7 @@ TEST_CASE(array_clear_zeroes_a_range)
     fake_init(PAYLOAD, HANDLES);
     a = make_array(FAKE_T_DATA, 4, 6);
     fill_ints(a);
-    array_clear(a, 2, 3);
+    array_clear(&fake_oh, a, 2, 3);
     expect_ints(a, want, 6);
 }
 
@@ -221,16 +221,16 @@ TEST_CASE(array_misuse_is_corrupt)
     fake_init(PAYLOAD, HANDLES);
     a = make_array(FAKE_T_DATA, 4, 4);
     b = make_array(FAKE_T_DATA, 8, 4);
-    o = objects_create(FAKE_T_DATA, 16);
+    o = objects_create(&fake_oh, FAKE_T_DATA, 16);
     fake_allow_corrupt();
-    CHECK(array_create(FAKE_T_DATA, 0, 4) == OBJECT_NULL);
-    CHECK_EQ(array_length(o), 0);
-    CHECK_EQ(array_length(OBJECT_NULL), 0);
-    CHECK(array_range_ptr(o, 0, 1) == NULL);
-    array_copy(a, 0, b, 0, 1);              /* element sizes differ */
-    array_copy(a, 3, a, 0, 2);              /* destination range */
-    array_copy(a, 0, a, 3, 2);              /* source range */
-    array_clear(a, 2, 3);
+    CHECK(array_create(&fake_oh, FAKE_T_DATA, 0, 4) == OBJECT_NULL);
+    CHECK_EQ(array_length(&fake_oh, o), 0);
+    CHECK_EQ(array_length(&fake_oh, OBJECT_NULL), 0);
+    CHECK(array_range_ptr(&fake_oh, o, 0, 1) == NULL);
+    array_copy(&fake_oh, a, 0, b, 0, 1);    /* element sizes differ */
+    array_copy(&fake_oh, a, 3, a, 0, 2);    /* destination range */
+    array_copy(&fake_oh, a, 0, a, 3, 2);    /* source range */
+    array_clear(&fake_oh, a, 2, 3);
     CHECK_EQ(fake_corrupt_count, 8);
 }
 
@@ -239,9 +239,9 @@ TEST_CASE(array_refmap_must_cover_the_element)
 #if OBJECT_DEBUG_REFS
     fake_init(PAYLOAD, HANDLES);
     fake_allow_corrupt();
-    CHECK(array_create(FAKE_T_NODE, 8, 2) == OBJECT_NULL);  /* the refmap covers 4 bytes */
+    CHECK(array_create(&fake_oh, FAKE_T_NODE, 8, 2) == OBJECT_NULL); /* the refmap covers 4 bytes */
     CHECK_EQ(fake_corrupt_count, 1);
-    CHECK(array_create(FAKE_T_NODE, 4, 2) != OBJECT_NULL);
+    CHECK(array_create(&fake_oh, FAKE_T_NODE, 4, 2) != OBJECT_NULL);
 #else
     harness_skip("the element refmap check is a debug-build feature");
 #endif
@@ -251,7 +251,7 @@ TEST_CASE(array_refmap_must_cover_the_element)
 
 static object_id_t make_string(const char * s)
 {
-    object_id_t id = obj_string_create(s, (uint32_t)strlen(s));
+    object_id_t id = obj_string_create(&fake_oh, s, (uint32_t)strlen(s));
 
     CHECK(id != OBJECT_NULL);
     return id;
@@ -263,15 +263,15 @@ TEST_CASE(string_create_ascii)
 
     fake_init(PAYLOAD, HANDLES);
     s = make_string("hello");
-    CHECK_EQ(obj_string_length(s), 5);
-    CHECK_EQ(obj_string_char_at(s, 0), 'h');
-    CHECK_EQ(obj_string_char_at(s, 4), 'o');
-    CHECK_EQ(obj_string_char_at(s, 5), -1);
-    CHECK_EQ(obj_string_char_at(s, 0xFFFFFFFFu), -1);
-    CHECK(strcmp(objects_ptr(s), "hello") == 0);           /* NUL-terminated for C */
-    CHECK_EQ(objects_size_of(s), 6);
-    CHECK_EQ(objects_type_of(s), FAKE_T_STRING);
-    CHECK_EQ(objects_kind_of(s), OBJECT_K_STRING);
+    CHECK_EQ(obj_string_length(&fake_oh, s), 5);
+    CHECK_EQ(obj_string_char_at(&fake_oh, s, 0), 'h');
+    CHECK_EQ(obj_string_char_at(&fake_oh, s, 4), 'o');
+    CHECK_EQ(obj_string_char_at(&fake_oh, s, 5), -1);
+    CHECK_EQ(obj_string_char_at(&fake_oh, s, 0xFFFFFFFFu), -1);
+    CHECK(strcmp(objects_ptr(&fake_oh, s), "hello") == 0);  /* NUL-terminated for C */
+    CHECK_EQ(objects_size_of(&fake_oh, s), 6);
+    CHECK_EQ(objects_type_of(&fake_oh, s), FAKE_T_STRING);
+    CHECK_EQ(objects_kind_of(&fake_oh, s), OBJECT_K_STRING);
     CHECK(handle_of(s)->flags & OBJECT_H_ASCII);
     CHECK(!(handle_of(s)->flags & OBJECT_H_HASREFS));
     CHECK_EQ(fake_corrupt_count, 0);
@@ -281,8 +281,8 @@ TEST_CASE(string_type_comes_from_the_config)
 {
     fake_config(PAYLOAD, HANDLES);
     fake_cfg.string_type = 77;
-    CHECK_EQ(obj_handler_init(&fake_cfg, &fake_host), OBJ_HANDLER_OK);
-    CHECK_EQ(objects_type_of(make_string("x")), 77);
+    CHECK_EQ(obj_handler_init(&fake_oh, &fake_cfg, &fake_host), OBJ_HANDLER_OK);
+    CHECK_EQ(objects_type_of(&fake_oh, make_string("x")), 77);
 }
 
 TEST_CASE(string_empty)
@@ -291,13 +291,13 @@ TEST_CASE(string_empty)
     object_id_t b;
 
     fake_init(PAYLOAD, HANDLES);
-    a = obj_string_create("", 0);
-    b = obj_string_create(NULL, 0);
+    a = obj_string_create(&fake_oh, "", 0);
+    b = obj_string_create(&fake_oh, NULL, 0);
     CHECK(a != OBJECT_NULL && b != OBJECT_NULL);
-    CHECK_EQ(obj_string_length(a), 0);
-    CHECK_EQ(obj_string_length(b), 0);
-    CHECK_EQ(((const char *)objects_ptr(a))[0], 0);
-    CHECK_EQ(obj_string_char_at(a, 0), -1);
+    CHECK_EQ(obj_string_length(&fake_oh, a), 0);
+    CHECK_EQ(obj_string_length(&fake_oh, b), 0);
+    CHECK_EQ(((const char *)objects_ptr(&fake_oh, a))[0], 0);
+    CHECK_EQ(obj_string_char_at(&fake_oh, a, 0), -1);
 }
 
 typedef struct {
@@ -350,7 +350,7 @@ TEST_CASE(string_utf8_validation_table)
     fake_init(PAYLOAD, HANDLES);
     for (k = 0; k < sizeof utf8_rows / sizeof utf8_rows[0]; k++) {
         const utf8_row_t * r = &utf8_rows[k];
-        object_id_t id = obj_string_create(r->bytes, r->len);
+        object_id_t id = obj_string_create(&fake_oh, r->bytes, r->len);
 
         if (!r->valid) {
             if (id != OBJECT_NULL)
@@ -359,8 +359,8 @@ TEST_CASE(string_utf8_validation_table)
         }
         if (id == OBJECT_NULL)
             harness_fail(__FILE__, __LINE__, r->what);
-        CHECK_EQ(obj_string_length(id), r->units);
-        CHECK_EQ(objects_size_of(id), r->len + 1);
+        CHECK_EQ(obj_string_length(&fake_oh, id), r->units);
+        CHECK_EQ(objects_size_of(&fake_oh, id), r->len + 1);
         CHECK_EQ((handle_of(id)->flags & OBJECT_H_ASCII) != 0, all_ascii(r->bytes, r->len));
     }
     CHECK_EQ(fake_corrupt_count, 0);
@@ -376,13 +376,13 @@ TEST_CASE(string_char_at_counts_utf16_units)
     uint32_t i;
 
     fake_init(PAYLOAD, HANDLES);
-    s = obj_string_create(text, sizeof text - 1);
+    s = obj_string_create(&fake_oh, text, sizeof text - 1);
     CHECK(s != OBJECT_NULL);
     CHECK(!(handle_of(s)->flags & OBJECT_H_ASCII));
-    CHECK_EQ(obj_string_length(s), 6);
+    CHECK_EQ(obj_string_length(&fake_oh, s), 6);
     for (i = 0; i < 6; i++)
-        CHECK_EQ(obj_string_char_at(s, i), units[i]);
-    CHECK_EQ(obj_string_char_at(s, 6), -1);
+        CHECK_EQ(obj_string_char_at(&fake_oh, s, i), units[i]);
+    CHECK_EQ(obj_string_char_at(&fake_oh, s, 6), -1);
 }
 
 TEST_CASE(string_concat)
@@ -392,21 +392,21 @@ TEST_CASE(string_concat)
 
     fake_init(PAYLOAD, HANDLES);
     a = make_string("foo");
-    c = obj_string_concat(a, make_string("bar"));
+    c = obj_string_concat(&fake_oh, a, make_string("bar"));
     CHECK(c != OBJECT_NULL);
-    CHECK(strcmp(objects_ptr(c), "foobar") == 0);
-    CHECK_EQ(obj_string_length(c), 6);
+    CHECK(strcmp(objects_ptr(&fake_oh, c), "foobar") == 0);
+    CHECK_EQ(obj_string_length(&fake_oh, c), 6);
     CHECK(handle_of(c)->flags & OBJECT_H_ASCII);
 
-    c = obj_string_concat(a, obj_string_create("\xC3\xA9", 2));
-    CHECK_EQ(obj_string_length(c), 4);
+    c = obj_string_concat(&fake_oh, a, obj_string_create(&fake_oh, "\xC3\xA9", 2));
+    CHECK_EQ(obj_string_length(&fake_oh, c), 4);
     CHECK(!(handle_of(c)->flags & OBJECT_H_ASCII));
-    CHECK_EQ(obj_string_char_at(c, 3), 0xE9);
+    CHECK_EQ(obj_string_char_at(&fake_oh, c, 3), 0xE9);
 
-    c = obj_string_concat(make_string(""), a);
-    CHECK(strcmp(objects_ptr(c), "foo") == 0);
-    CHECK(strcmp(objects_ptr(a), "foo") == 0);             /* the operands are unchanged */
-    CHECK(heap_verify());
+    c = obj_string_concat(&fake_oh, make_string(""), a);
+    CHECK(strcmp(objects_ptr(&fake_oh, c), "foo") == 0);
+    CHECK(strcmp(objects_ptr(&fake_oh, a), "foo") == 0);    /* the operands are unchanged */
+    CHECK(heap_verify(&fake_oh));
 }
 
 TEST_CASE(string_that_can_never_fit_returns_null)
@@ -416,13 +416,13 @@ TEST_CASE(string_that_can_never_fit_returns_null)
 
     fake_init(HEAP_MAX_PAYLOAD, HEAP_MAX_PAYLOAD / 32);
     memset(big, 'a', sizeof big);
-    CHECK(obj_string_create(big, HEAP_MAX_PAYLOAD) == OBJECT_NULL);    /* rejected before reading */
-    CHECK(obj_string_create(big, 0xFFFFFFFFu) == OBJECT_NULL);
-    s = obj_string_create(big, sizeof big);
+    CHECK(obj_string_create(&fake_oh, big, HEAP_MAX_PAYLOAD) == OBJECT_NULL);  /* not even read */
+    CHECK(obj_string_create(&fake_oh, big, 0xFFFFFFFFu) == OBJECT_NULL);
+    s = obj_string_create(&fake_oh, big, sizeof big);
     CHECK(s != OBJECT_NULL);
-    CHECK(obj_string_concat(s, s) == OBJECT_NULL);             /* 80,000 bytes */
+    CHECK(obj_string_concat(&fake_oh, s, s) == OBJECT_NULL);  /* 80,000 bytes */
     CHECK_EQ(fake_oom_count, 0);
-    CHECK_EQ(obj_string_length(s), sizeof big);
+    CHECK_EQ(obj_string_length(&fake_oh, s), sizeof big);
 }
 
 TEST_CASE(string_misuse_is_corrupt)
@@ -432,13 +432,13 @@ TEST_CASE(string_misuse_is_corrupt)
 
     fake_init(PAYLOAD, HANDLES);
     s = make_string("x");
-    o = objects_create(FAKE_T_DATA, 8);
+    o = objects_create(&fake_oh, FAKE_T_DATA, 8);
     fake_allow_corrupt();
-    CHECK_EQ(obj_string_length(o), 0);
-    CHECK_EQ(obj_string_char_at(o, 0), -1);
-    CHECK(obj_string_concat(o, s) == OBJECT_NULL);
-    CHECK(obj_string_concat(s, OBJECT_NULL) == OBJECT_NULL);
-    CHECK(obj_string_create(NULL, 3) == OBJECT_NULL);
+    CHECK_EQ(obj_string_length(&fake_oh, o), 0);
+    CHECK_EQ(obj_string_char_at(&fake_oh, o, 0), -1);
+    CHECK(obj_string_concat(&fake_oh, o, s) == OBJECT_NULL);
+    CHECK(obj_string_concat(&fake_oh, s, OBJECT_NULL) == OBJECT_NULL);
+    CHECK(obj_string_create(&fake_oh, NULL, 3) == OBJECT_NULL);
     CHECK_EQ(fake_corrupt_count, 5);
 }
 
@@ -449,11 +449,11 @@ TEST_CASE(string_clone_keeps_ascii)
 
     fake_init(PAYLOAD, HANDLES);
     s = make_string("clone me");
-    c = objects_clone(s);
+    c = objects_clone(&fake_oh, s);
     CHECK(c != OBJECT_NULL && c != s);
     CHECK(handle_of(c)->flags & OBJECT_H_ASCII);
-    CHECK(strcmp(objects_ptr(c), "clone me") == 0);
-    CHECK_EQ(obj_string_length(c), 8);
+    CHECK(strcmp(objects_ptr(&fake_oh, c), "clone me") == 0);
+    CHECK_EQ(obj_string_length(&fake_oh, c), 8);
 }
 
 static const harness_case_t cases[] = {

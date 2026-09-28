@@ -14,8 +14,6 @@ extern "C" {
 #define HEAP_GUARD_BYTES        0u
 #endif
 
-#define HEAP_HISTOGRAM_BUCKETS  12u     /* bucket k: rounded size <= 8 << k; the last: larger */
-
 typedef struct {
     uint32_t payload_bytes;
     uint32_t used_bytes;            /* live blocks, guard headers included */
@@ -28,20 +26,23 @@ typedef struct {
     uint32_t histogram[HEAP_HISTOGRAM_BUCKETS];
 } heap_stats_t;
 
-object_id_t heap_alloc(uint16_t space, uint16_t type, uint8_t kind, uint32_t bytes);
-void        heap_stats(heap_stats_t * out);
-uint32_t    heap_in_use(void);
-uint32_t    heap_largest_free(void);
-int         heap_verify(void);      /* 1: consistent; 0: the first fault went to on_corrupt */
+object_id_t heap_alloc(obj_handler_t * oh, uint16_t space, uint16_t type, uint8_t kind,
+                       uint32_t bytes);
+void        heap_stats(obj_handler_t * oh, heap_stats_t * out);
+uint32_t    heap_in_use(obj_handler_t * oh);
+uint32_t    heap_largest_free(obj_handler_t * oh);
+/* 1: consistent; 0: the first fault went to on_corrupt. */
+int         heap_verify(obj_handler_t * oh);
 
 /* Called by the sweep and by tests; an embedder never frees (doc 18 section 4). */
-void        heap_release(object_id_t id);
+void        heap_release(obj_handler_t * oh, object_id_t id);
 
 /* Library-internal: called by obj_handler_init and obj_handler_shutdown. */
-void        heap_segment_init(uint32_t seg, uint8_t * payload, uint32_t payload_size,
+void        heap_segment_init(obj_handler_t * oh, uint32_t seg,
+                              uint8_t * payload, uint32_t payload_size,
                               object_handle_t * handles, uint32_t handle_count,
                               uint8_t gc_threshold_pct, uint8_t gc_handle_pct);
-void        heap_shutdown(void);
+void        heap_shutdown(obj_handler_t * oh);
 
 #ifdef __cplusplus
 }

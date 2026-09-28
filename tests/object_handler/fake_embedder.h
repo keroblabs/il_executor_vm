@@ -22,14 +22,20 @@ enum {
 
 extern obj_handler_config_t fake_cfg;
 extern obj_handler_host_t   fake_host;
+extern obj_handler_t        fake_oh;        /* the instance fake_start initialises */
 
-extern jmp_buf      fake_oom_jmp;
-extern int          fake_oom_armed;
-extern unsigned     fake_oom_count;
+extern jmp_buf         fake_oom_jmp;
+extern int             fake_oom_armed;
+extern unsigned        fake_oom_count;
 
-extern unsigned     fake_corrupt_count;
-extern const char * fake_corrupt_where;
-extern object_id_t  fake_corrupt_id;
+extern unsigned        fake_corrupt_count;
+extern const char *    fake_corrupt_where;
+extern object_id_t     fake_corrupt_id;
+
+/* The instance that made the last call to each callback. */
+extern obj_handler_t * fake_oom_oh;
+extern obj_handler_t * fake_corrupt_oh;
+extern obj_handler_t * fake_refmap_oh;
 
 void              fake_config(uint32_t payload_size, uint32_t handle_count);
 void              fake_start(void);         /* obj_handler_init on fake_cfg, which must pass */

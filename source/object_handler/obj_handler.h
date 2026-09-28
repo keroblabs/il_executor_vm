@@ -16,8 +16,8 @@ extern "C" {
 /* obj_handler_init result, checked in this order; append only (doc 14 section 9.2) */
 typedef enum {
     OBJ_HANDLER_OK = 0,
-    OBJ_HANDLER_E_ARG_NULL,         /* cfg or host is NULL */
-    OBJ_HANDLER_E_ALREADY_INIT,     /* already initialised; shut down first */
+    OBJ_HANDLER_E_ARG_NULL,         /* oh, cfg or host is NULL */
+    OBJ_HANDLER_E_ALREADY_INIT,     /* this instance is initialised; shut it down first */
     OBJ_HANDLER_E_SEGMENTS,         /* segments == 0 or > HEAP_SEGMENTS */
     OBJ_HANDLER_E_PAYLOAD_BASE,     /* payload NULL or not 8-byte aligned */
     OBJ_HANDLER_E_PAYLOAD_SIZE,     /* < 16, > HEAP_MAX_PAYLOAD, or not a multiple of 8 */
@@ -27,15 +27,6 @@ typedef enum {
     OBJ_HANDLER_E_STATICS,          /* statics malformed, or its refmap marks bytes 0-7 */
     OBJ_HANDLER_E_CONST             /* the constant table, or one of its entries */
 } obj_handler_status_t;
-
-typedef struct {
-    /* Bit i set: word i of the payload is an object id. NULL: no ids.
-       For an array type, the bitmap of one element (doc 14 section 5.7). */
-    const uint8_t * (*type_refmap)(uint16_t type, uint32_t * words);
-
-    void (*on_oom)(void);                                   /* must not return */
-    void (*on_corrupt)(const char * where, object_id_t id); /* an embedder bug */
-} obj_handler_host_t;
 
 /* Every region is caller-supplied (doc 14 section 9). */
 typedef struct {
@@ -63,13 +54,11 @@ typedef struct {
     uint16_t        worklist_len;   uint16_t * worklist;
 } obj_handler_config_t;
 
-obj_handler_status_t obj_handler_init(const obj_handler_config_t * cfg,
-                                      const obj_handler_host_t   * host);
-void                 obj_handler_shutdown(void);
-int                  obj_handler_is_ready(void);
-
-/* Library-internal: the host callbacks, valid while initialised. */
-extern obj_handler_host_t obj_handler_host;
+/* One instance per application; instances share nothing, so each may run on its own thread. */
+obj_handler_status_t obj_handler_init(obj_handler_t * oh, const obj_handler_config_t * cfg,
+                                      const obj_handler_host_t * host);
+void                 obj_handler_shutdown(obj_handler_t * oh);  /* zeroes the instance */
+int                  obj_handler_is_ready(obj_handler_t * oh);
 
 #ifdef __cplusplus
 }

@@ -4,23 +4,16 @@
 #error "only UTF-8 string payloads are implemented (doc 14 section 5.6)"
 #endif
 
-static uint16_t obj_string_type;
-
-void obj_string_init(uint16_t string_type)
-{
-    obj_string_type = string_type;
-}
-
 /* ldstr: a literal is a constant, read in place (doc 14 section 3.5). */
-object_id_t obj_string_intern(uint16_t literal_index)
+object_id_t obj_string_intern(obj_handler_t * oh, uint16_t literal_index)
 {
     const object_id_t id = OBJECT_ID(OBJECT_SPACE_CONST, literal_index);
     object_info_t info;
 
-    if (!objects_info(id, &info, "obj_string_intern: not a constant"))
+    if (!objects_info(oh, id, &info, "obj_string_intern: not a constant"))
         return OBJECT_NULL;
     if (info.kind != OBJECT_K_STRING) {
-        objects_corrupt("obj_string_intern: the constant is not a string", id);
+        objects_corrupt(oh, "obj_string_intern: the constant is not a string", id);
         return OBJECT_NULL;
     }
     return id;
@@ -103,53 +96,54 @@ static uint32_t obj_string_decode(const uint8_t * s, uint32_t width)
 }
 
 /* A live string, heap or constant (doc 14 section 3.5). */
-static int obj_string_info(object_id_t id, object_info_t * info, const char * where)
+static int obj_string_info(obj_handler_t * oh, object_id_t id, object_info_t * info,
+                           const char * where)
 {
-    if (!objects_info(id, info, where))
+    if (!objects_info(oh, id, info, where))
         return 0;
     if (info->kind != OBJECT_K_STRING || info->size == 0) {
-        objects_corrupt(where, id);
+        objects_corrupt(oh, where, id);
         return 0;
     }
     return 1;
 }
 
 /* A string of `bytes` UTF-8 bytes; its NUL is already there, since heap_alloc zeroes. */
-static object_id_t obj_string_alloc(uint32_t bytes, int ascii)
+static object_id_t obj_string_alloc(obj_handler_t * oh, uint32_t bytes, int ascii)
 {
     object_id_t id;
 
     if (bytes >= HEAP_MAX_PAYLOAD)
         return OBJECT_NULL;
-    id = heap_alloc(OBJECT_SPACE_HEAP, obj_string_type, OBJECT_K_STRING, bytes + 1u);
+    id = heap_alloc(oh, OBJECT_SPACE_HEAP, oh->string_type, OBJECT_K_STRING, bytes + 1u);
     if (id != OBJECT_NULL && ascii)
-        object_spaces[OBJECT_SPACE(id)].handles[OBJECT_INDEX(id)].flags |= OBJECT_H_ASCII;
+        oh->spaces[OBJECT_SPACE(id)].handles[OBJECT_INDEX(id)].flags |= OBJECT_H_ASCII;
     return id;
 }
 
-object_id_t obj_string_create(const char * utf8, uint32_t len)
+object_id_t obj_string_create(obj_handler_t * oh, const char * utf8, uint32_t len)
 {
     object_id_t id;
     int ascii = 0;
 
     if (utf8 == NULL && len != 0) {
-        objects_corrupt("obj_string_create: NULL bytes", OBJECT_NULL);
+        objects_corrupt(oh, "obj_string_create: NULL bytes", OBJECT_NULL);
         return OBJECT_NULL;
     }
     if (len >= HEAP_MAX_PAYLOAD || !obj_string_valid((const uint8_t *)utf8, len, &ascii))
         return OBJECT_NULL;
-    id = obj_string_alloc(len, ascii);
+    id = obj_string_alloc(oh, len, ascii);
     if (id != OBJECT_NULL && len != 0)
-        memcpy(objects_ptr(id), utf8, len);
+        memcpy(objects_ptr(oh, id), utf8, len);
     return id;
 }
 
-object_id_t obj_string_concat(object_id_t a, object_id_t b)
+object_id_t obj_string_concat(obj_handler_t * oh, object_id_t a, object_id_t b)
 {
     object_info_t ia;
     object_info_t ib;
-    const int ok_a = obj_string_info(a, &ia, "obj_string_concat: not a live string");
-    const int ok_b = obj_string_info(b, &ib, "obj_string_concat: not a live string");
+    const int ok_a = obj_string_info(oh, a, &ia, "obj_string_concat: not a live string");
+    const int ok_b = obj_string_info(oh, b, &ib, "obj_string_concat: not a live string");
     uint32_t la;
     uint32_t lb;
     uint8_t * p;
@@ -159,17 +153,17 @@ object_id_t obj_string_concat(object_id_t a, object_id_t b)
         return OBJECT_NULL;
     la = ia.size - 1u;
     lb = ib.size - 1u;
-    id = obj_string_alloc(la + lb, (ia.flags & ib.flags & OBJECT_H_ASCII) != 0);
+    id = obj_string_alloc(oh, la + lb, (ia.flags & ib.flags & OBJECT_H_ASCII) != 0);
     if (id == OBJECT_NULL)
         return OBJECT_NULL;
     /* Resolved after the allocation, which may collect: a and b must be rooted. */
-    p = (uint8_t *)objects_ptr(id);
-    memcpy(p, objects_ptr(a), la);
-    memcpy(p + la, objects_ptr(b), lb);
+    p = (uint8_t *)objects_ptr(oh, id);
+    memcpy(p, objects_ptr(oh, a), la);
+    memcpy(p + la, objects_ptr(oh, b), lb);
     return id;
 }
 
-uint32_t obj_string_length(object_id_t id)
+uint32_t obj_string_length(obj_handler_t * oh, object_id_t id)
 {
     object_info_t info;
     const uint8_t * s;
@@ -177,18 +171,18 @@ uint32_t obj_string_length(object_id_t id)
     uint32_t i;
     uint32_t units = 0;
 
-    if (!obj_string_info(id, &info, "obj_string_length: not a live string"))
+    if (!obj_string_info(oh, id, &info, "obj_string_length: not a live string"))
         return 0;
     n = info.size - 1u;
     if (info.flags & OBJECT_H_ASCII)
         return n;
-    s = (const uint8_t *)objects_ptr(id);
+    s = (const uint8_t *)objects_ptr(oh, id);
     for (i = 0; i < n; i += obj_string_width(s[i]))
         units += s[i] >= 0xF0 ? 2u : 1u;        /* a supplementary character is a surrogate pair */
     return units;
 }
 
-int32_t obj_string_char_at(object_id_t id, uint32_t index)
+int32_t obj_string_char_at(obj_handler_t * oh, object_id_t id, uint32_t index)
 {
     object_info_t info;
     const uint8_t * s;
@@ -196,10 +190,10 @@ int32_t obj_string_char_at(object_id_t id, uint32_t index)
     uint32_t i;
     uint32_t unit = 0;
 
-    if (!obj_string_info(id, &info, "obj_string_char_at: not a live string"))
+    if (!obj_string_info(oh, id, &info, "obj_string_char_at: not a live string"))
         return -1;
     n = info.size - 1u;
-    s = (const uint8_t *)objects_ptr(id);
+    s = (const uint8_t *)objects_ptr(oh, id);
     if (info.flags & OBJECT_H_ASCII)
         return index < n ? (int32_t)s[index] : -1;
 

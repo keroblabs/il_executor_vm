@@ -24,8 +24,10 @@ object_handler_test(test_heap)
 object_handler_test(test_array_string)
 object_handler_test(test_value)
 object_handler_test(test_spaces)
+object_handler_test(test_instances)
 
-foreach(target object_handler_harness test_objects test_heap test_array_string test_value test_spaces)
+foreach(target object_handler_harness test_objects test_heap test_array_string test_value test_spaces
+               test_instances)
     set_target_properties(${target} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE -Wall -Wextra -Werror -pedantic)

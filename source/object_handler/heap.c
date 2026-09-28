@@ -36,26 +36,6 @@ typedef struct {            /* precedes every live block */
 } heap_guard_t;
 #endif
 
-typedef struct {
-    uint8_t         * payload;
-    object_handle_t * handles;
-    uint32_t          payload_size;
-    uint32_t          handle_count;
-    uint32_t          top;              /* [top, payload_size) has never been carved */
-    uint32_t          used;
-    uint32_t          peak_used;
-    uint32_t          collect_at;       /* 0: no threshold */
-    uint32_t          handles_used;
-    uint32_t          handle_collect_at;
-    uint16_t          free_head;
-    uint16_t          handle_free_head; /* 0: none */
-    uint16_t          handle_free_tail;
-    uint32_t          histogram[HEAP_HISTOGRAM_BUCKETS];
-} heap_segment_t;
-
-static heap_segment_t heap_segments[HEAP_SEGMENTS];
-static uint32_t       heap_segment_count;
-
 static heap_free_t * heap_free_at(const heap_segment_t * s, uint32_t off)
 {
     return (heap_free_t *)(void *)(s->payload + off);
@@ -82,12 +62,13 @@ static uint32_t heap_bucket(uint32_t size)
     return k;
 }
 
-void heap_segment_init(uint32_t seg, uint8_t * payload, uint32_t payload_size,
+void heap_segment_init(obj_handler_t * oh, uint32_t seg,
+                       uint8_t * payload, uint32_t payload_size,
                        object_handle_t * handles, uint32_t handle_count,
                        uint8_t gc_threshold_pct, uint8_t gc_handle_pct)
 {
-    heap_segment_t * s = &heap_segments[seg];
-    object_space_t * sp = &object_spaces[OBJECT_SPACE_HEAP + seg];
+    heap_segment_t * s = &oh->heap[seg];
+    object_space_t * sp = &oh->spaces[OBJECT_SPACE_HEAP + seg];
     uint32_t i;
 
     memset(s, 0, sizeof *s);
@@ -120,17 +101,17 @@ void heap_segment_init(uint32_t seg, uint8_t * payload, uint32_t payload_size,
     sp->handles = handles;
     sp->limit   = handle_count;
     sp->flags   = OBJECT_SP_COLLECTED | OBJECT_SP_WRITABLE;
-    heap_segment_count = seg + 1u;
+    oh->heap_count = seg + 1u;
 }
 
-void heap_shutdown(void)
+void heap_shutdown(obj_handler_t * oh)
 {
     uint32_t seg;
 
-    for (seg = 0; seg < heap_segment_count; seg++)
-        HEAP_ASAN_UNPOISON(heap_segments[seg].payload, heap_segments[seg].payload_size);
-    memset(heap_segments, 0, sizeof heap_segments);
-    heap_segment_count = 0;
+    for (seg = 0; seg < oh->heap_count; seg++)
+        HEAP_ASAN_UNPOISON(oh->heap[seg].payload, oh->heap[seg].payload_size);
+    memset(oh->heap, 0, sizeof oh->heap);
+    oh->heap_count = 0;
 }
 
 /* First fit over the address-ordered free list, then the untouched top. 0: no room. */
@@ -221,7 +202,8 @@ static void heap_insert_free(heap_segment_t * s, uint32_t start, uint32_t size)
     }
 }
 
-object_id_t heap_alloc(uint16_t space, uint16_t type, uint8_t kind, uint32_t bytes)
+object_id_t heap_alloc(obj_handler_t * oh, uint16_t space, uint16_t type, uint8_t kind,
+                       uint32_t bytes)
 {
     heap_segment_t * s;
     object_handle_t * h;
@@ -230,15 +212,15 @@ object_id_t heap_alloc(uint16_t space, uint16_t type, uint8_t kind, uint32_t byt
     uint32_t words = 0;
     uint16_t index;
 
-    if ((uint32_t)space - OBJECT_SPACE_HEAP >= heap_segment_count) {
-        objects_corrupt("heap_alloc: not a configured heap segment", OBJECT_NULL);
+    if ((uint32_t)space - OBJECT_SPACE_HEAP >= oh->heap_count) {
+        objects_corrupt(oh, "heap_alloc: not a configured heap segment", OBJECT_NULL);
         return OBJECT_NULL;
     }
     if (kind == OBJECT_K_FREE || kind >= OBJECT_K_COUNT) {
-        objects_corrupt("heap_alloc: invalid kind", OBJECT_NULL);
+        objects_corrupt(oh, "heap_alloc: invalid kind", OBJECT_NULL);
         return OBJECT_NULL;
     }
-    s = &heap_segments[space - OBJECT_SPACE_HEAP];
+    s = &oh->heap[space - OBJECT_SPACE_HEAP];
 
     /* The only OBJECT_NULL return: a request that can never fit (A10). */
     if (bytes > s->payload_size
@@ -248,23 +230,23 @@ object_id_t heap_alloc(uint16_t space, uint16_t type, uint8_t kind, uint32_t byt
 
     if ((s->collect_at != 0 && s->used + need > s->collect_at)
         || (s->handle_collect_at != 0 && s->handles_used + 1u > s->handle_collect_at))
-        gc_request();
+        gc_request(oh);
 
     /* The handle is secured first, so an on_oom that longjmps strands no block. */
     if (s->handle_free_head == 0) {
-        gc_collect();
+        gc_collect(oh);
         if (s->handle_free_head == 0) {
-            obj_handler_host.on_oom();
+            oh->host.on_oom(oh);
             return OBJECT_NULL;
         }
     }
     if (need != 0) {
         off = heap_carve(s, need);
         if (off == 0) {
-            gc_collect();
+            gc_collect(oh);
             off = heap_carve(s, need);
             if (off == 0) {
-                obj_handler_host.on_oom();
+                oh->host.on_oom(oh);
                 return OBJECT_NULL;
             }
         }
@@ -298,7 +280,7 @@ object_id_t heap_alloc(uint16_t space, uint16_t type, uint8_t kind, uint32_t byt
     h->kind  = kind;
     h->flags = OBJECT_H_INUSE;
     if (kind != OBJECT_K_STRING && kind != OBJECT_K_RAW          /* never scanned (A3) */
-        && obj_handler_host.type_refmap(type, &words) != NULL)
+        && oh->host.type_refmap(oh, type, &words) != NULL)
         h->flags |= OBJECT_H_HASREFS;
 
     s->used += need;
@@ -309,19 +291,19 @@ object_id_t heap_alloc(uint16_t space, uint16_t type, uint8_t kind, uint32_t byt
     return OBJECT_ID_GEN(space, OBJECT_HANDLE_GEN(h), index);
 }
 
-void heap_release(object_id_t id)
+void heap_release(obj_handler_t * oh, object_id_t id)
 {
-    object_handle_t * h = objects_handle_of(id, "heap_release: not a live heap object");
+    object_handle_t * h = objects_handle_of(oh, id, "heap_release: not a live heap object");
     heap_segment_t * s;
     uint16_t index = OBJECT_INDEX(id);
 
     if (h == NULL)
         return;
     if (h->flags & OBJECT_H_PINNED) {
-        objects_corrupt("heap_release: object is pinned", id);
+        objects_corrupt(oh, "heap_release: object is pinned", id);
         return;
     }
-    s = &heap_segments[OBJECT_SPACE(id) - OBJECT_SPACE_HEAP];
+    s = &oh->heap[OBJECT_SPACE(id) - OBJECT_SPACE_HEAP];
 
     if (h->offset != 0) {
         uint32_t need  = HEAP_ALIGN(h->size) + HEAP_GUARD_BYTES;
@@ -333,7 +315,7 @@ void heap_release(object_id_t id)
 
             if (g->magic != HEAP_GUARD_MAGIC || g->check != heap_guard_check(g)
                 || g->handle != index || g->size != need) {
-                objects_corrupt("heap_release: guard header damaged", id);
+                objects_corrupt(oh, "heap_release: guard header damaged", id);
                 return;
             }
         }
@@ -360,14 +342,14 @@ void heap_release(object_id_t id)
     s->handles_used--;
 }
 
-void heap_stats(heap_stats_t * out)
+void heap_stats(obj_handler_t * oh, heap_stats_t * out)
 {
     uint32_t seg;
     uint32_t k;
 
     memset(out, 0, sizeof *out);
-    for (seg = 0; seg < heap_segment_count; seg++) {
-        const heap_segment_t * s = &heap_segments[seg];
+    for (seg = 0; seg < oh->heap_count; seg++) {
+        const heap_segment_t * s = &oh->heap[seg];
         uint32_t tail = s->payload_size - s->top;
         uint32_t off;
 
@@ -395,35 +377,35 @@ void heap_stats(heap_stats_t * out)
     }
 }
 
-uint32_t heap_in_use(void)
+uint32_t heap_in_use(obj_handler_t * oh)
 {
     uint32_t seg;
     uint32_t used = 0;
 
-    for (seg = 0; seg < heap_segment_count; seg++)
-        used += heap_segments[seg].used;
+    for (seg = 0; seg < oh->heap_count; seg++)
+        used += oh->heap[seg].used;
     return used;
 }
 
-uint32_t heap_largest_free(void)
+uint32_t heap_largest_free(obj_handler_t * oh)
 {
     heap_stats_t st;
 
-    heap_stats(&st);
+    heap_stats(oh, &st);
     return st.largest_free;
 }
 
 /* ---- heap_verify: the invariant checker (doc 18 section 4, item 4) --- */
 
-static int heap_fail(const char * why, object_id_t id)
+static int heap_fail(obj_handler_t * oh, const char * why, object_id_t id)
 {
-    objects_corrupt(why, id);
+    objects_corrupt(oh, why, id);
     return 0;
 }
 
-static int heap_verify_segment(uint32_t seg)
+static int heap_verify_segment(obj_handler_t * oh, uint32_t seg)
 {
-    const heap_segment_t * s = &heap_segments[seg];
+    const heap_segment_t * s = &oh->heap[seg];
     const uint16_t space = (uint16_t)(OBJECT_SPACE_HEAP + seg);
     uint32_t prev_end = 0;
     uint32_t free_bytes = 0;
@@ -437,25 +419,25 @@ static int heap_verify_segment(uint32_t seg)
     uint16_t last = 0;
 
     if (s->top < HEAP_SENTINEL_BYTES || s->top > s->payload_size || (s->top & 7u) != 0)
-        return heap_fail("heap_verify: top out of range", OBJECT_NULL);
+        return heap_fail(oh, "heap_verify: top out of range", OBJECT_NULL);
 
     for (off = s->free_head; off != 0; off = heap_free_at(s, off)->next) {
         const heap_free_t * f;
 
         if (off < HEAP_SENTINEL_BYTES || off >= s->top || (off & 7u) != 0)
-            return heap_fail("heap_verify: free block out of range", OBJECT_NULL);
+            return heap_fail(oh, "heap_verify: free block out of range", OBJECT_NULL);
         if (prev_end != 0 && off < prev_end)
-            return heap_fail("heap_verify: free list not address-ordered", OBJECT_NULL);
+            return heap_fail(oh, "heap_verify: free list not address-ordered", OBJECT_NULL);
         if (prev_end != 0 && off == prev_end)
-            return heap_fail("heap_verify: adjacent free blocks not coalesced", OBJECT_NULL);
+            return heap_fail(oh, "heap_verify: adjacent free blocks not coalesced", OBJECT_NULL);
         f = heap_free_at(s, off);
         if (f->size < 8u || (f->size & 7u) != 0 || off + f->size > s->top)
-            return heap_fail("heap_verify: free block size", OBJECT_NULL);
+            return heap_fail(oh, "heap_verify: free block size", OBJECT_NULL);
         prev_end = off + f->size;
         free_bytes += f->size;
     }
     if (prev_end == s->top)
-        return heap_fail("heap_verify: last free block not merged into the top", OBJECT_NULL);
+        return heap_fail(oh, "heap_verify: last free block not merged into the top", OBJECT_NULL);
 
     for (i = 1; i < s->handle_count; i++) {
         const object_handle_t * h = &s->handles[i];
@@ -464,45 +446,45 @@ static int heap_verify_segment(uint32_t seg)
 
 #if OBJECT_DEBUG_REFS
         if (h->gen == 0)
-            return heap_fail("heap_verify: handle generation 0", id);
+            return heap_fail(oh, "heap_verify: handle generation 0", id);
 #endif
         if (!(h->flags & OBJECT_H_INUSE)) {
             if (h->flags != 0 || h->kind != OBJECT_K_FREE)
-                return heap_fail("heap_verify: free handle keeps flags or kind", id);
+                return heap_fail(oh, "heap_verify: free handle keeps flags or kind", id);
             continue;
         }
         if (h->kind == OBJECT_K_FREE || h->kind >= OBJECT_K_COUNT)
-            return heap_fail("heap_verify: live handle has an invalid kind", id);
+            return heap_fail(oh, "heap_verify: live handle has an invalid kind", id);
         live++;
         if (h->offset == 0) {
             if (h->size != 0)
-                return heap_fail("heap_verify: sized object without a block", id);
+                return heap_fail(oh, "heap_verify: sized object without a block", id);
             continue;
         }
         start = (uint32_t)h->offset - HEAP_GUARD_BYTES;
         if (h->size == 0 || (h->offset & 7u) != 0
             || h->offset < HEAP_SENTINEL_BYTES + HEAP_GUARD_BYTES
             || start + HEAP_ALIGN(h->size) + HEAP_GUARD_BYTES > s->top)
-            return heap_fail("heap_verify: live block out of range", id);
+            return heap_fail(oh, "heap_verify: live block out of range", id);
         live_bytes += HEAP_ALIGN(h->size) + HEAP_GUARD_BYTES;
         live_blocks++;
     }
 
     for (hi = s->handle_free_head; hi != 0; hi = s->handles[hi].offset) {
         if (hi >= s->handle_count || (s->handles[hi].flags & OBJECT_H_INUSE))
-            return heap_fail("heap_verify: handle free list corrupt", OBJECT_NULL);
+            return heap_fail(oh, "heap_verify: handle free list corrupt", OBJECT_NULL);
         if (++free_handles > s->handle_count - 1u)
-            return heap_fail("heap_verify: handle free list cycles", OBJECT_NULL);
+            return heap_fail(oh, "heap_verify: handle free list cycles", OBJECT_NULL);
         last = hi;
     }
     if (last != s->handle_free_tail)
-        return heap_fail("heap_verify: handle free-list tail", OBJECT_NULL);
+        return heap_fail(oh, "heap_verify: handle free-list tail", OBJECT_NULL);
     if (live != s->handles_used || live + free_handles != s->handle_count - 1u)
-        return heap_fail("heap_verify: handle accounting", OBJECT_NULL);
+        return heap_fail(oh, "heap_verify: handle accounting", OBJECT_NULL);
     if (live_bytes != s->used)
-        return heap_fail("heap_verify: used bytes", OBJECT_NULL);
+        return heap_fail(oh, "heap_verify: used bytes", OBJECT_NULL);
     if (live_bytes + free_bytes != s->top - HEAP_SENTINEL_BYTES)
-        return heap_fail("heap_verify: blocks do not cover the payload", OBJECT_NULL);
+        return heap_fail(oh, "heap_verify: blocks do not cover the payload", OBJECT_NULL);
 
 #if HEAP_DEBUG
     /* Guard headers make an exact address walk possible: no gap, no overlap. */
@@ -525,17 +507,17 @@ static int heap_verify_segment(uint32_t seg)
             g = heap_guard_at(s, p);
             if (g->magic != HEAP_GUARD_MAGIC || g->check != heap_guard_check(g)
                 || g->handle == 0 || g->handle >= s->handle_count)
-                return heap_fail("heap_verify: guard header damaged", OBJECT_NULL);
+                return heap_fail(oh, "heap_verify: guard header damaged", OBJECT_NULL);
             h = &s->handles[g->handle];
             if (!(h->flags & OBJECT_H_INUSE) || h->offset != p + HEAP_GUARD_BYTES
                 || g->size != HEAP_ALIGN(h->size) + HEAP_GUARD_BYTES)
-                return heap_fail("heap_verify: guard does not match its handle",
+                return heap_fail(oh, "heap_verify: guard does not match its handle",
                                  OBJECT_ID_GEN(space, OBJECT_HANDLE_GEN(h), g->handle));
             p += g->size;
             blocks++;
         }
         if (p != s->top || next_free != 0 || blocks != live_blocks)
-            return heap_fail("heap_verify: address walk does not end at the top", OBJECT_NULL);
+            return heap_fail(oh, "heap_verify: address walk does not end at the top", OBJECT_NULL);
     }
 #else
     (void)live_blocks;
@@ -543,12 +525,12 @@ static int heap_verify_segment(uint32_t seg)
     return 1;
 }
 
-int heap_verify(void)
+int heap_verify(obj_handler_t * oh)
 {
     uint32_t seg;
 
-    for (seg = 0; seg < heap_segment_count; seg++)
-        if (!heap_verify_segment(seg))
+    for (seg = 0; seg < oh->heap_count; seg++)
+        if (!heap_verify_segment(oh, seg))
             return 0;
     return 1;
 }

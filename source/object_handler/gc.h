@@ -7,8 +7,8 @@
 extern "C" {
 #endif
 
-void gc_collect(void);
-void gc_request(void);      /* collect at the next safepoint (doc 14 section 7.3) */
+void gc_collect(obj_handler_t * oh);
+void gc_request(obj_handler_t * oh);        /* collect at the next safepoint (doc 14 section 7.3) */
 
 #ifdef __cplusplus
 }

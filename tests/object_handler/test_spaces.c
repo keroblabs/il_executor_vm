@@ -9,14 +9,14 @@ static heap_stats_t stats(void)
 {
     heap_stats_t st;
 
-    heap_stats(&st);
+    heap_stats(&fake_oh, &st);
     return st;
 }
 
 static void expect_init(obj_handler_status_t expected)
 {
-    CHECK_EQ(obj_handler_init(&fake_cfg, &fake_host), expected);
-    CHECK(!obj_handler_is_ready());
+    CHECK_EQ(obj_handler_init(&fake_oh, &fake_cfg, &fake_host), expected);
+    CHECK(!obj_handler_is_ready(&fake_oh));
 }
 
 /* ---- the statics slab (doc 14 section 3.5) --------------------------- */
@@ -26,14 +26,14 @@ TEST_CASE(statics_resolve_as_byte_offsets)
     object_byref_t b;
 
     fake_init(PAYLOAD, HANDLES);
-    CHECK(objects_ptr(OBJECT_ID(OBJECT_SPACE_STATIC, 8)) == fake_statics() + 8);
-    CHECK(objects_ptr(OBJECT_ID(OBJECT_SPACE_STATIC, FAKE_STATICS_BYTES - 1))
+    CHECK(objects_ptr(&fake_oh, OBJECT_ID(OBJECT_SPACE_STATIC, 8)) == fake_statics() + 8);
+    CHECK(objects_ptr(&fake_oh, OBJECT_ID(OBJECT_SPACE_STATIC, FAKE_STATICS_BYTES - 1))
           == fake_statics() + FAKE_STATICS_BYTES - 1);
     b.id = OBJECT_ID(OBJECT_SPACE_STATIC, 16);
     b.offset = 4;
     b._pad = 0;
-    CHECK(objects_byref_ptr(b) == fake_statics() + 20);
-    CHECK_EQ(object_spaces[OBJECT_SPACE_STATIC].flags, OBJECT_SP_WRITABLE | OBJECT_SP_ROOT);
+    CHECK(objects_byref_ptr(&fake_oh, b) == fake_statics() + 20);
+    CHECK_EQ(fake_oh.spaces[OBJECT_SPACE_STATIC].flags, OBJECT_SP_WRITABLE | OBJECT_SP_ROOT);
     CHECK_EQ(fake_corrupt_count, 0);
 }
 
@@ -42,8 +42,8 @@ TEST_CASE(statics_reserved_bytes_and_bounds_in_debug)
 #if OBJECT_DEBUG_REFS
     fake_init(PAYLOAD, HANDLES);
     fake_allow_corrupt();
-    CHECK(objects_ptr(OBJECT_ID(OBJECT_SPACE_STATIC, 0)) == NULL);
-    CHECK(objects_ptr(OBJECT_ID(OBJECT_SPACE_STATIC, FAKE_STATICS_BYTES)) == NULL);
+    CHECK(objects_ptr(&fake_oh, OBJECT_ID(OBJECT_SPACE_STATIC, 0)) == NULL);
+    CHECK(objects_ptr(&fake_oh, OBJECT_ID(OBJECT_SPACE_STATIC, FAKE_STATICS_BYTES)) == NULL);
     CHECK_EQ(fake_corrupt_count, 2);
 #else
     harness_skip("checked resolution is a debug-build feature");
@@ -57,7 +57,7 @@ TEST_CASE(statics_are_optional)
     fake_cfg.statics_size = 0;
     fake_cfg.statics_refmap = NULL;
     fake_start();
-    CHECK_EQ(object_spaces[OBJECT_SPACE_STATIC].limit, 0);
+    CHECK_EQ(fake_oh.spaces[OBJECT_SPACE_STATIC].limit, 0);
 }
 
 TEST_CASE(init_rejects_malformed_statics)
@@ -105,17 +105,18 @@ TEST_CASE(literal_is_read_in_place)
     fake_consts_install();
     fake_start();
 
-    id = obj_string_intern(i);
+    id = obj_string_intern(&fake_oh, i);
     CHECK(id == OBJECT_ID(OBJECT_SPACE_CONST, i));
-    CHECK(objects_ptr(id) == fake_const_bytes() + fake_const_entry(i)->offset);   /* no copy */
-    CHECK(strcmp(objects_ptr(id), "hello") == 0);
-    CHECK_EQ(obj_string_length(id), 5);
-    CHECK_EQ(obj_string_char_at(id, 1), 'e');
-    CHECK_EQ(objects_type_of(id), FAKE_T_STRING);
-    CHECK_EQ(objects_kind_of(id), OBJECT_K_STRING);
-    CHECK_EQ(objects_size_of(id), 6);
+    CHECK(objects_ptr(&fake_oh, id)
+          == fake_const_bytes() + fake_const_entry(i)->offset);  /* no copy */
+    CHECK(strcmp(objects_ptr(&fake_oh, id), "hello") == 0);
+    CHECK_EQ(obj_string_length(&fake_oh, id), 5);
+    CHECK_EQ(obj_string_char_at(&fake_oh, id, 1), 'e');
+    CHECK_EQ(objects_type_of(&fake_oh, id), FAKE_T_STRING);
+    CHECK_EQ(objects_kind_of(&fake_oh, id), OBJECT_K_STRING);
+    CHECK_EQ(objects_size_of(&fake_oh, id), 6);
     CHECK_EQ(stats().live_objects, 0);                          /* nothing was allocated */
-    CHECK_EQ(heap_in_use(), 0);
+    CHECK_EQ(heap_in_use(&fake_oh), 0);
     CHECK_EQ(fake_corrupt_count, 0);
 }
 
@@ -128,10 +129,10 @@ TEST_CASE(non_ascii_literal_decodes)
     id = OBJECT_ID(OBJECT_SPACE_CONST, fake_const_string("\xC3\xA9t\xC3\xA9", 5));
     fake_consts_install();
     fake_start();
-    CHECK_EQ(obj_string_length(id), 3);
-    CHECK_EQ(obj_string_char_at(id, 0), 0xE9);
-    CHECK_EQ(obj_string_char_at(id, 1), 't');
-    CHECK_EQ(obj_string_char_at(id, 3), -1);
+    CHECK_EQ(obj_string_length(&fake_oh, id), 3);
+    CHECK_EQ(obj_string_char_at(&fake_oh, id, 0), 0xE9);
+    CHECK_EQ(obj_string_char_at(&fake_oh, id, 1), 't');
+    CHECK_EQ(obj_string_char_at(&fake_oh, id, 3), -1);
 }
 
 TEST_CASE(intern_misuse_is_corrupt)
@@ -149,18 +150,18 @@ TEST_CASE(intern_misuse_is_corrupt)
     fake_cfg.const_count = beyond;              /* a real string entry sits just past the table */
     fake_start();
     fake_allow_corrupt();
-    CHECK(obj_string_intern(0) == OBJECT_NULL);                 /* the reserved entry */
-    CHECK(obj_string_intern(beyond) == OBJECT_NULL);            /* past const_count */
-    CHECK(obj_string_intern(raw) == OBJECT_NULL);               /* not a string */
+    CHECK(obj_string_intern(&fake_oh, 0) == OBJECT_NULL);       /* the reserved entry */
+    CHECK(obj_string_intern(&fake_oh, beyond) == OBJECT_NULL);  /* past const_count */
+    CHECK(obj_string_intern(&fake_oh, raw) == OBJECT_NULL);     /* not a string */
     CHECK_EQ(fake_corrupt_count, 3);
 }
 
 TEST_CASE(constants_are_optional)
 {
     fake_init(PAYLOAD, HANDLES);
-    CHECK_EQ(object_spaces[OBJECT_SPACE_CONST].limit, 0);
+    CHECK_EQ(fake_oh.spaces[OBJECT_SPACE_CONST].limit, 0);
     fake_allow_corrupt();
-    CHECK(obj_string_intern(1) == OBJECT_NULL);
+    CHECK(obj_string_intern(&fake_oh, 1) == OBJECT_NULL);
     CHECK_EQ(fake_corrupt_count, 1);
 }
 
@@ -179,16 +180,16 @@ TEST_CASE(constant_array_reads_like_a_heap_array)
     fake_consts_install();
     fake_start();
 
-    CHECK_EQ(array_length(c), 5);
-    CHECK_EQ(*(const int32_t *)array_element_ptr(c, 2), 30);
-    CHECK(array_element_ptr(c, 5) == NULL);
-    b = array_element_byref(c, 4);
+    CHECK_EQ(array_length(&fake_oh, c), 5);
+    CHECK_EQ(*(const int32_t *)array_element_ptr(&fake_oh, c, 2), 30);
+    CHECK(array_element_ptr(&fake_oh, c, 5) == NULL);
+    b = array_element_byref(&fake_oh, c, 4);
     CHECK(b.id == c);
-    CHECK(objects_byref_ptr(b) == array_element_ptr(c, 4));
+    CHECK(objects_byref_ptr(&fake_oh, b) == array_element_ptr(&fake_oh, c, 4));
 
-    h = array_create(FAKE_T_DATA, 4, 5);
-    array_copy(h, 0, c, 0, 5);                                  /* out of the image */
-    copied = array_range_ptr(h, 0, 5);
+    h = array_create(&fake_oh, FAKE_T_DATA, 4, 5);
+    array_copy(&fake_oh, h, 0, c, 0, 5);                        /* out of the image */
+    copied = array_range_ptr(&fake_oh, h, 0, 5);
     for (k = 0; k < 5; k++)
         CHECK_EQ(copied[k], elements[k]);
     CHECK_EQ(fake_corrupt_count, 0);
@@ -207,14 +208,14 @@ TEST_CASE(writing_into_a_constant_is_corrupt)
     s = OBJECT_ID(OBJECT_SPACE_CONST, fake_const_string("s", 1));
     fake_consts_install();
     fake_start();
-    h = array_create(FAKE_T_DATA, 4, 2);
+    h = array_create(&fake_oh, FAKE_T_DATA, 4, 2);
     fake_allow_corrupt();
-    array_copy(c, 0, h, 0, 1);
-    array_clear(c, 0, 1);
-    heap_release(c);
-    heap_release(s);
+    array_copy(&fake_oh, c, 0, h, 0, 1);
+    array_clear(&fake_oh, c, 0, 1);
+    heap_release(&fake_oh, c);
+    heap_release(&fake_oh, s);
     CHECK_EQ(fake_corrupt_count, 4);
-    CHECK_EQ(*(const int32_t *)array_element_ptr(c, 0), 7);    /* untouched */
+    CHECK_EQ(*(const int32_t *)array_element_ptr(&fake_oh, c, 0), 7);  /* untouched */
 }
 
 TEST_CASE(pinning_a_constant_does_nothing)
@@ -226,9 +227,9 @@ TEST_CASE(pinning_a_constant_does_nothing)
     s = OBJECT_ID(OBJECT_SPACE_CONST, fake_const_string("pin", 3));
     fake_consts_install();
     fake_start();
-    CHECK(objects_pin(s) == objects_ptr(s));
-    objects_unpin(s);
-    objects_unpin(s);
+    CHECK(objects_pin(&fake_oh, s) == objects_ptr(&fake_oh, s));
+    objects_unpin(&fake_oh, s);
+    objects_unpin(&fake_oh, s);
     CHECK_EQ(fake_corrupt_count, 0);
 }
 
@@ -247,21 +248,21 @@ TEST_CASE(concat_and_clone_copy_constants_into_the_heap)
     fake_consts_install();
     fake_start();
 
-    c = obj_string_concat(s, obj_string_create("bar", 3));
+    c = obj_string_concat(&fake_oh, s, obj_string_create(&fake_oh, "bar", 3));
     CHECK_EQ(OBJECT_SPACE(c), OBJECT_SPACE_HEAP);
-    CHECK(strcmp(objects_ptr(c), "foobar") == 0);
+    CHECK(strcmp(objects_ptr(&fake_oh, c), "foobar") == 0);
     CHECK(fake_handles()[OBJECT_INDEX(c)].flags & OBJECT_H_ASCII);
 
-    k = objects_clone(s);
+    k = objects_clone(&fake_oh, s);
     CHECK_EQ(OBJECT_SPACE(k), OBJECT_SPACE_HEAP);
-    CHECK(strcmp(objects_ptr(k), "foo") == 0);
+    CHECK(strcmp(objects_ptr(&fake_oh, k), "foo") == 0);
     CHECK(fake_handles()[OBJECT_INDEX(k)].flags & OBJECT_H_ASCII);
 
-    k = objects_clone(a);
+    k = objects_clone(&fake_oh, a);
     CHECK_EQ(OBJECT_SPACE(k), OBJECT_SPACE_HEAP);
-    CHECK_EQ(array_length(k), 3);
-    CHECK_EQ(*(int32_t *)array_element_ptr(k, 2), 3);
-    CHECK(heap_verify());
+    CHECK_EQ(array_length(&fake_oh, k), 3);
+    CHECK_EQ(*(int32_t *)array_element_ptr(&fake_oh, k, 2), 3);
+    CHECK(heap_verify(&fake_oh));
 }
 
 TEST_CASE(constant_box_unboxes)
@@ -275,7 +276,7 @@ TEST_CASE(constant_box_unboxes)
     b = OBJECT_ID(OBJECT_SPACE_CONST, fake_const_add(FAKE_T_DATA, OBJECT_K_BOX, 0, &v, sizeof v));
     fake_consts_install();
     fake_start();
-    value_unbox(b, &out, sizeof out);
+    value_unbox(&fake_oh, b, &out, sizeof out);
     CHECK_EQ(out, 7);
 }
 
@@ -290,7 +291,7 @@ TEST_CASE(constant_id_with_a_generation_is_rejected_in_debug)
     fake_consts_install();
     fake_start();
     fake_allow_corrupt();
-    CHECK_EQ(objects_type_of(OBJECT_ID_GEN(OBJECT_SPACE_CONST, 1, i)), 0);
+    CHECK_EQ(objects_type_of(&fake_oh, OBJECT_ID_GEN(OBJECT_SPACE_CONST, 1, i)), 0);
     CHECK_EQ(fake_corrupt_count, 1);
 #else
     harness_skip("release ids carry no generation");

@@ -10,7 +10,7 @@
 
 static object_id_t alloc_kind(uint16_t type, uint8_t kind, uint32_t bytes)
 {
-    object_id_t id = heap_alloc(OBJECT_SPACE_HEAP, type, kind, bytes);
+    object_id_t id = heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, type, kind, bytes);
 
     CHECK(id != OBJECT_NULL);
     return id;
@@ -35,13 +35,13 @@ static heap_stats_t stats(void)
 {
     heap_stats_t st;
 
-    heap_stats(&st);
+    heap_stats(&fake_oh, &st);
     return st;
 }
 
 static void verify(void)
 {
-    CHECK(heap_verify());
+    CHECK(heap_verify(&fake_oh));
 }
 
 /* A, B, C, D of 32 bytes each; D keeps C away from the untouched top. */
@@ -64,21 +64,21 @@ TEST_CASE(alloc_gives_zeroed_aligned_payload)
 
     fake_init(PAYLOAD, HANDLES);
     a = alloc(40);
-    p = objects_ptr(a);
+    p = objects_ptr(&fake_oh, a);
     CHECK(((uintptr_t)p & 7u) == 0);
     CHECK_EQ(offset_of(a), HEAP_SENTINEL_BYTES + G);
-    CHECK_EQ(objects_size_of(a), 40);
-    CHECK_EQ(objects_type_of(a), FAKE_T_DATA);
-    CHECK_EQ(objects_kind_of(a), OBJECT_K_OBJECT);
+    CHECK_EQ(objects_size_of(&fake_oh, a), 40);
+    CHECK_EQ(objects_type_of(&fake_oh, a), FAKE_T_DATA);
+    CHECK_EQ(objects_kind_of(&fake_oh, a), OBJECT_K_OBJECT);
     CHECK_EQ(handle_of(a)->flags, OBJECT_H_INUSE);
     for (i = 0; i < 40; i++)
         CHECK_EQ(p[i], 0);
 
     memset(p, 0xFF, 40);
-    heap_release(a);
+    heap_release(&fake_oh, a);
     a = alloc(40);
     CHECK_EQ(offset_of(a), HEAP_SENTINEL_BYTES + G);
-    p = objects_ptr(a);
+    p = objects_ptr(&fake_oh, a);
     for (i = 0; i < 40; i++)
         CHECK_EQ(p[i], 0);
     verify();
@@ -105,11 +105,11 @@ TEST_CASE(zero_byte_object_has_no_block)
     before = stats();
     a = alloc(0);
     CHECK_EQ(offset_of(a), 0);
-    CHECK_EQ(objects_size_of(a), 0);
+    CHECK_EQ(objects_size_of(&fake_oh, a), 0);
     CHECK_EQ(stats().used_bytes, before.used_bytes);
     CHECK_EQ(stats().live_objects, before.live_objects + 1);
     verify();
-    heap_release(a);
+    heap_release(&fake_oh, a);
     verify();
     CHECK_EQ(stats().live_objects, 0);
 }
@@ -120,15 +120,18 @@ TEST_CASE(request_that_can_never_fit_returns_null)
     object_id_t a;
 
     fake_init(PAYLOAD, HANDLES);
-    CHECK(heap_alloc(OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_RAW, largest + 1) == OBJECT_NULL);
-    CHECK(heap_alloc(OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_RAW, PAYLOAD) == OBJECT_NULL);
-    CHECK(heap_alloc(OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_RAW, 0xFFFFFFFFu) == OBJECT_NULL);
+    CHECK(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_RAW, largest + 1)
+          == OBJECT_NULL);
+    CHECK(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_RAW, PAYLOAD)
+          == OBJECT_NULL);
+    CHECK(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_RAW, 0xFFFFFFFFu)
+          == OBJECT_NULL);
     CHECK_EQ(fake_oom_count, 0);
 
     a = alloc_kind(FAKE_T_DATA, OBJECT_K_RAW, largest);
     CHECK_EQ(stats().free_bytes, 0);
     verify();
-    heap_release(a);
+    heap_release(&fake_oh, a);
     verify();
 }
 
@@ -143,7 +146,7 @@ TEST_CASE(max_payload_boundaries)
     CHECK_EQ(offset_of(a) + largest, HEAP_MAX_PAYLOAD);
     CHECK_EQ(stats().free_bytes, 0);
     verify();
-    heap_release(a);
+    heap_release(&fake_oh, a);
     verify();
     CHECK_EQ(stats().largest_free, HEAP_MAX_PAYLOAD - HEAP_SENTINEL_BYTES);
 
@@ -153,9 +156,9 @@ TEST_CASE(max_payload_boundaries)
     CHECK_EQ(offset_of(b), HEAP_MAX_PAYLOAD - 8);
     CHECK_EQ(stats().free_bytes, 0);
     verify();
-    heap_release(a);
+    heap_release(&fake_oh, a);
     verify();
-    heap_release(b);
+    heap_release(&fake_oh, b);
     verify();
     CHECK_EQ(stats().free_blocks, 1);
 }
@@ -175,10 +178,10 @@ TEST_CASE(stats_track_usage)
     CHECK_EQ(st.free_handles, HANDLES - 1 - 2);
     CHECK_EQ(st.histogram[0], 1);               /* 8 bytes */
     CHECK_EQ(st.histogram[4], 1);               /* 104 bytes: 64 < 104 <= 128 */
-    CHECK_EQ(heap_in_use(), st.used_bytes);
-    heap_release(a);
+    CHECK_EQ(heap_in_use(&fake_oh), st.used_bytes);
+    heap_release(&fake_oh, a);
     CHECK_EQ(stats().peak_used_bytes, 104 + 8 + 2 * G);
-    CHECK_EQ(heap_largest_free(), stats().largest_free);
+    CHECK_EQ(heap_largest_free(&fake_oh), stats().largest_free);
 }
 
 /* ---- release and coalescing (doc 18 section 4) ----------------------- */
@@ -190,7 +193,7 @@ TEST_CASE(coalesce_with_neither)
 
     layout(id);
     b = offset_of(id[1]);
-    heap_release(id[1]);
+    heap_release(&fake_oh, id[1]);
     verify();
     CHECK_EQ(stats().free_blocks, 2);           /* the hole and the top */
     CHECK_EQ(offset_of(alloc(32)), b);          /* exact fit */
@@ -205,8 +208,8 @@ TEST_CASE(coalesce_with_previous_only)
 
     layout(id);
     a = offset_of(id[0]);
-    heap_release(id[0]);
-    heap_release(id[1]);
+    heap_release(&fake_oh, id[0]);
+    heap_release(&fake_oh, id[1]);
     verify();
     CHECK_EQ(stats().free_blocks, 2);
     CHECK_EQ(offset_of(alloc(2 * BLOCK - G)), a);
@@ -220,8 +223,8 @@ TEST_CASE(coalesce_with_next_only)
 
     layout(id);
     a = offset_of(id[0]);
-    heap_release(id[1]);
-    heap_release(id[0]);
+    heap_release(&fake_oh, id[1]);
+    heap_release(&fake_oh, id[0]);
     verify();
     CHECK_EQ(stats().free_blocks, 2);
     CHECK_EQ(offset_of(alloc(2 * BLOCK - G)), a);
@@ -235,9 +238,9 @@ TEST_CASE(coalesce_with_both)
 
     layout(id);
     a = offset_of(id[0]);
-    heap_release(id[0]);
-    heap_release(id[2]);
-    heap_release(id[1]);
+    heap_release(&fake_oh, id[0]);
+    heap_release(&fake_oh, id[2]);
+    heap_release(&fake_oh, id[1]);
     verify();
     CHECK_EQ(stats().free_blocks, 2);
     CHECK_EQ(offset_of(alloc(3 * BLOCK - G)), a);
@@ -251,7 +254,7 @@ TEST_CASE(split_leaves_the_remainder_free)
 
     layout(id);
     b = offset_of(id[1]);
-    heap_release(id[1]);
+    heap_release(&fake_oh, id[1]);
     CHECK_EQ(offset_of(alloc(8)), b);
     CHECK_EQ(stats().free_blocks, 2);           /* the remainder and the top */
     verify();
@@ -265,11 +268,11 @@ TEST_CASE(release_at_the_top_lowers_it)
     fake_init(PAYLOAD, HANDLES);
     a = alloc(32);
     b = alloc(32);
-    heap_release(b);
+    heap_release(&fake_oh, b);
     verify();
     CHECK_EQ(stats().free_blocks, 1);
     CHECK_EQ(stats().free_bytes, PAYLOAD - HEAP_SENTINEL_BYTES - BLOCK);
-    heap_release(a);
+    heap_release(&fake_oh, a);
     verify();
     CHECK_EQ(stats().largest_free, PAYLOAD - HEAP_SENTINEL_BYTES);
     CHECK_EQ(stats().used_bytes, 0);
@@ -285,8 +288,8 @@ TEST_CASE(hole_rejoins_the_top_with_its_upper_neighbour)
     a = alloc(32);
     b = alloc(32);
     c = alloc(32);
-    heap_release(b);
-    heap_release(c);
+    heap_release(&fake_oh, b);
+    heap_release(&fake_oh, c);
     verify();
     CHECK_EQ(stats().free_blocks, 1);
     CHECK_EQ(offset_of(alloc(32)), offset_of(a) + BLOCK);
@@ -305,14 +308,15 @@ TEST_CASE(payload_exhaustion_ends_in_on_oom)
     while (stats().free_bytes >= 256 + G)
         ids[n++] = alloc(256);
     before = stats();
-    FAKE_EXPECT_OOM(heap_alloc(OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_OBJECT, 256));
+    FAKE_EXPECT_OOM(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_OBJECT, 256));
     CHECK_EQ(fake_oom_count, 1);
     CHECK_EQ(stats().live_objects, before.live_objects);
     CHECK_EQ(stats().free_handles, before.free_handles);
     verify();
 
-    heap_release(ids[0]);
-    CHECK(heap_alloc(OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_OBJECT, 256) != OBJECT_NULL);
+    heap_release(&fake_oh, ids[0]);
+    CHECK(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_OBJECT, 256)
+          != OBJECT_NULL);
     verify();
 }
 
@@ -323,7 +327,7 @@ TEST_CASE(handle_exhaustion_ends_in_on_oom)
     fake_init(PAYLOAD, 8);
     for (i = 0; i < 7; i++)
         alloc(8);
-    FAKE_EXPECT_OOM(heap_alloc(OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_OBJECT, 8));
+    FAKE_EXPECT_OOM(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_OBJECT, 8));
     CHECK_EQ(fake_oom_count, 1);
     CHECK_EQ(stats().used_bytes, 7 * (8 + G));  /* the failed request carved nothing */
     verify();
@@ -338,7 +342,7 @@ TEST_CASE(stale_id_caught_in_debug_only)
 
     fake_init(PAYLOAD, 4);                      /* handles 1-3 */
     a = alloc(16);
-    heap_release(a);                            /* handle 1 rejoins at the tail */
+    heap_release(&fake_oh, a);                  /* handle 1 rejoins at the tail */
     alloc(16);
     alloc(16);
     d = alloc(16);
@@ -346,11 +350,11 @@ TEST_CASE(stale_id_caught_in_debug_only)
 #if OBJECT_DEBUG_REFS
     CHECK(d != a);
     fake_allow_corrupt();
-    CHECK(objects_ptr(a) == NULL);
+    CHECK(objects_ptr(&fake_oh, a) == NULL);
     CHECK_EQ(fake_corrupt_count, 1);
 #else
     CHECK(d == a);                              /* byte-identical: nothing can tell them apart */
-    CHECK(objects_ptr(a) == objects_ptr(d));
+    CHECK(objects_ptr(&fake_oh, a) == objects_ptr(&fake_oh, d));
     CHECK_EQ(fake_corrupt_count, 0);
 #endif
 }
@@ -361,7 +365,7 @@ TEST_CASE(freed_handles_are_reused_last)
 
     fake_init(PAYLOAD, HANDLES);
     a = alloc(16);
-    heap_release(a);
+    heap_release(&fake_oh, a);
     CHECK(OBJECT_INDEX(alloc(16)) != OBJECT_INDEX(a));
     verify();
 }
@@ -372,13 +376,13 @@ TEST_CASE(release_misuse_is_corrupt)
 
     fake_init(PAYLOAD, HANDLES);
     a = alloc(16);
-    heap_release(a);
+    heap_release(&fake_oh, a);
     fake_allow_corrupt();
-    heap_release(a);
+    heap_release(&fake_oh, a);
     CHECK_EQ(fake_corrupt_count, 1);
-    heap_release(OBJECT_NULL);
+    heap_release(&fake_oh, OBJECT_NULL);
     CHECK_EQ(fake_corrupt_count, 2);
-    heap_release(OBJECT_ID(OBJECT_SPACE_STATIC, 8));
+    heap_release(&fake_oh, OBJECT_ID(OBJECT_SPACE_STATIC, 8));
     CHECK_EQ(fake_corrupt_count, 3);
     verify();
 }
@@ -387,12 +391,13 @@ TEST_CASE(alloc_misuse_is_corrupt)
 {
     fake_init(PAYLOAD, HANDLES);
     fake_allow_corrupt();
-    CHECK(heap_alloc(OBJECT_SPACE_CONST, FAKE_T_DATA, OBJECT_K_OBJECT, 8) == OBJECT_NULL);
-    CHECK(heap_alloc(OBJECT_SPACE_HEAP + 1, FAKE_T_DATA, OBJECT_K_OBJECT, 8) == OBJECT_NULL);
-    CHECK(heap_alloc(OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_FREE, 8) == OBJECT_NULL);
-    CHECK(heap_alloc(OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_COUNT, 8) == OBJECT_NULL);
+    CHECK(heap_alloc(&fake_oh, OBJECT_SPACE_CONST, FAKE_T_DATA, OBJECT_K_OBJECT, 8) == OBJECT_NULL);
+    CHECK(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP + 1, FAKE_T_DATA, OBJECT_K_OBJECT, 8)
+          == OBJECT_NULL);
+    CHECK(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_FREE, 8) == OBJECT_NULL);
+    CHECK(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_COUNT, 8) == OBJECT_NULL);
     CHECK_EQ(fake_corrupt_count, 4);
-    CHECK(objects_promote(OBJECT_ID(OBJECT_SPACE_FRAME, 8)) == OBJECT_NULL);
+    CHECK(objects_promote(&fake_oh, OBJECT_ID(OBJECT_SPACE_FRAME, 8)) == OBJECT_NULL);
     CHECK_EQ(fake_corrupt_count, 5);
     verify();
 }
@@ -404,10 +409,10 @@ TEST_CASE(create_makes_a_plain_object)
     object_id_t a;
 
     fake_init(PAYLOAD, HANDLES);
-    a = objects_create(FAKE_T_DATA, 40);
-    CHECK_EQ(objects_kind_of(a), OBJECT_K_OBJECT);
-    CHECK_EQ(objects_size_of(a), 40);
-    CHECK(objects_promote(a) == a);
+    a = objects_create(&fake_oh, FAKE_T_DATA, 40);
+    CHECK_EQ(objects_kind_of(&fake_oh, a), OBJECT_K_OBJECT);
+    CHECK_EQ(objects_size_of(&fake_oh, a), 40);
+    CHECK(objects_promote(&fake_oh, a) == a);
     verify();
 }
 
@@ -420,15 +425,15 @@ TEST_CASE(clone_copies_the_payload)
 
     fake_init(PAYLOAD, HANDLES);
     a = alloc_kind(FAKE_T_NODE, OBJECT_K_OBJECT, 24);
-    p = objects_ptr(a);
+    p = objects_ptr(&fake_oh, a);
     for (i = 0; i < 24; i++)
         p[i] = (uint8_t)(i * 7u + 1u);
-    b = objects_clone(a);
+    b = objects_clone(&fake_oh, a);
     CHECK(b != OBJECT_NULL && b != a);
-    CHECK_EQ(objects_type_of(b), FAKE_T_NODE);
-    CHECK_EQ(objects_size_of(b), 24);
+    CHECK_EQ(objects_type_of(&fake_oh, b), FAKE_T_NODE);
+    CHECK_EQ(objects_size_of(&fake_oh, b), 24);
     CHECK(handle_of(b)->flags & OBJECT_H_HASREFS);
-    CHECK(memcmp(objects_ptr(a), objects_ptr(b), 24) == 0);
+    CHECK(memcmp(objects_ptr(&fake_oh, a), objects_ptr(&fake_oh, b), 24) == 0);
     verify();
 }
 
@@ -440,22 +445,23 @@ TEST_CASE(pins_nest_up_to_seven)
     fake_init(PAYLOAD, HANDLES);
     a = alloc(16);
     for (i = 0; i < 7; i++)
-        CHECK(objects_pin(a) == objects_ptr(a));
+        CHECK(objects_pin(&fake_oh, a) == objects_ptr(&fake_oh, a));
     CHECK_EQ(handle_of(a)->flags & OBJECT_H_PINNED, OBJECT_H_PINNED);
 
     fake_allow_corrupt();
-    CHECK(objects_pin(a) == objects_ptr(a));    /* refused, but the pointer stays valid */
+    /* Refused, but the pointer stays valid. */
+    CHECK(objects_pin(&fake_oh, a) == objects_ptr(&fake_oh, a));
     CHECK_EQ(fake_corrupt_count, 1);
-    heap_release(a);                            /* a pinned object is never freed */
+    heap_release(&fake_oh, a);                  /* a pinned object is never freed */
     CHECK_EQ(fake_corrupt_count, 2);
-    CHECK_EQ(objects_size_of(a), 16);
+    CHECK_EQ(objects_size_of(&fake_oh, a), 16);
 
     for (i = 0; i < 7; i++)
-        objects_unpin(a);
+        objects_unpin(&fake_oh, a);
     CHECK_EQ(handle_of(a)->flags & OBJECT_H_PINNED, 0);
-    objects_unpin(a);
+    objects_unpin(&fake_oh, a);
     CHECK_EQ(fake_corrupt_count, 3);
-    heap_release(a);
+    heap_release(&fake_oh, a);
     CHECK_EQ(fake_corrupt_count, 3);
     verify();
 }
@@ -469,11 +475,11 @@ TEST_CASE(verify_catches_a_damaged_free_block)
 
     layout(id);
     start = offset_of(id[1]) - G;
-    heap_release(id[1]);
+    heap_release(&fake_oh, id[1]);
     fake_allow_corrupt();
     /* heap_free_t is { next, size } at the start of the free block (doc 14 section 5.1) */
     ((uint16_t *)(void *)(fake_payload() + start))[1] = 8;
-    CHECK(!heap_verify());
+    CHECK(!heap_verify(&fake_oh));
     CHECK_EQ(fake_corrupt_count, 1);
 }
 
@@ -484,7 +490,7 @@ TEST_CASE(verify_catches_a_misaligned_handle)
     layout(id);
     fake_allow_corrupt();
     fake_handles()[OBJECT_INDEX(id[1])].offset += 4;
-    CHECK(!heap_verify());
+    CHECK(!heap_verify(&fake_oh));
     CHECK_EQ(fake_corrupt_count, 1);
 }
 
@@ -496,7 +502,7 @@ TEST_CASE(verify_catches_overlap_in_debug)
     layout(id);
     fake_allow_corrupt();
     fake_handles()[OBJECT_INDEX(id[1])].offset += 8;    /* B now overlaps C */
-    CHECK(!heap_verify());
+    CHECK(!heap_verify(&fake_oh));
     CHECK_EQ(fake_corrupt_count, 1);
 #else
     harness_skip("the exact address walk needs HEAP_DEBUG guard headers");
@@ -511,9 +517,9 @@ TEST_CASE(verify_catches_a_damaged_guard)
     layout(id);
     fake_allow_corrupt();
     fake_payload()[offset_of(id[2]) - G] ^= 0xFF;          /* B overran into C's guard */
-    CHECK(!heap_verify());
+    CHECK(!heap_verify(&fake_oh));
     CHECK_EQ(fake_corrupt_count, 1);
-    heap_release(id[2]);                                    /* refused: the guard is wrong */
+    heap_release(&fake_oh, id[2]);                          /* refused: the guard is wrong */
     CHECK_EQ(fake_corrupt_count, 2);
 #else
     harness_skip("guard headers are a debug-build feature");
@@ -533,7 +539,7 @@ TEST_CASE(fragmentation_ratio_is_reported)
     while (stats().free_bytes >= BLOCK && n < 512)
         ids[n++] = alloc(32);
     for (i = 1; i + 1 < n; i += 2)
-        heap_release(ids[i]);
+        heap_release(&fake_oh, ids[i]);
     verify();
     st = stats();
     printf("fragmentation: largest free %lu of %lu free bytes, ratio %.3f\n",
@@ -574,8 +580,8 @@ static void torture_dump(void)
 /* Each object holds one byte value throughout: an overlap between two blocks shows here. */
 static void torture_check(uint32_t k)
 {
-    const uint8_t * p = objects_ptr(torture.id[k]);
-    uint32_t n = objects_size_of(torture.id[k]);
+    const uint8_t * p = objects_ptr(&fake_oh, torture.id[k]);
+    uint32_t n = objects_size_of(&fake_oh, torture.id[k]);
     uint32_t i;
 
     for (i = 0; i < n; i++)
@@ -595,32 +601,33 @@ static void torture_run(uint32_t seed)
             fake_oom_armed = 1;
             if (setjmp(fake_oom_jmp) == 0) {
                 uint32_t bytes = torture_rand() % 300;
-                object_id_t id = heap_alloc(OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_OBJECT, bytes);
+                object_id_t id = heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA,
+                                            OBJECT_K_OBJECT, bytes);
 
                 fake_oom_armed = 0;
                 CHECK(id != OBJECT_NULL);
                 torture.id[torture.live] = id;
                 torture.fill[torture.live] = (uint8_t)(torture_rand() | 1u);
-                memset(objects_ptr(id), torture.fill[torture.live], bytes);
+                memset(objects_ptr(&fake_oh, id), torture.fill[torture.live], bytes);
                 torture.live++;
             }
         } else {
             uint32_t k = torture_rand() % torture.live;
 
             torture_check(k);
-            heap_release(torture.id[k]);
+            heap_release(&fake_oh, torture.id[k]);
             torture.live--;
             torture.id[k] = torture.id[torture.live];
             torture.fill[k] = torture.fill[torture.live];
         }
         if (torture.op < TORTURE_FULL || torture.op % 97 == 0)
-            CHECK(heap_verify());
+            CHECK(heap_verify(&fake_oh));
     }
     while (torture.live > 0) {
         torture_check(torture.live - 1);
-        heap_release(torture.id[--torture.live]);
+        heap_release(&fake_oh, torture.id[--torture.live]);
     }
-    CHECK(heap_verify());
+    CHECK(heap_verify(&fake_oh));
     st = stats();
     printf("torture seed %lu: %lu allocations ended in on_oom\n",
            (unsigned long)seed, (unsigned long)fake_oom_count);

@@ -2,14 +2,12 @@
 
 /* OH-2 stub: nothing can be marked until OH-3 brings the roots (doc 18 section 4). */
 
-static int gc_requested;
-
-void gc_collect(void)
+void gc_collect(obj_handler_t * oh)
 {
-    gc_requested = 0;
+    oh->gc_requested = 0;
 }
 
-void gc_request(void)
+void gc_request(obj_handler_t * oh)
 {
-    gc_requested = 1;
+    oh->gc_requested = 1;
 }

@@ -3,14 +3,19 @@
 #include "fake_embedder.h"
 
 obj_handler_config_t fake_cfg;
+obj_handler_t        fake_oh;
 
-jmp_buf      fake_oom_jmp;
-int          fake_oom_armed;
-unsigned     fake_oom_count;
+jmp_buf         fake_oom_jmp;
+int             fake_oom_armed;
+unsigned        fake_oom_count;
 
-unsigned     fake_corrupt_count;
-const char * fake_corrupt_where;
-object_id_t  fake_corrupt_id;
+unsigned        fake_corrupt_count;
+const char *    fake_corrupt_where;
+object_id_t     fake_corrupt_id;
+
+obj_handler_t * fake_oom_oh;
+obj_handler_t * fake_corrupt_oh;
+obj_handler_t * fake_refmap_oh;
 
 static int fake_corrupt_allowed;
 
@@ -28,8 +33,9 @@ static uint32_t fake_const_used;
 static const uint8_t fake_map_node[] = { 0x01 };
 static const uint8_t fake_map_pair[] = { 0x03 };
 
-static const uint8_t * fake_type_refmap(uint16_t type, uint32_t * words)
+static const uint8_t * fake_type_refmap(obj_handler_t * oh, uint16_t type, uint32_t * words)
 {
+    fake_refmap_oh = oh;
     switch (type) {
     case FAKE_T_NODE:
         *words = 1;
@@ -46,9 +52,10 @@ static const uint8_t * fake_type_refmap(uint16_t type, uint32_t * words)
     }
 }
 
-static void fake_on_oom(void)
+static void fake_on_oom(obj_handler_t * oh)
 {
     fake_oom_count++;
+    fake_oom_oh = oh;
     if (fake_oom_armed) {
         fake_oom_armed = 0;
         longjmp(fake_oom_jmp, 1);
@@ -56,9 +63,10 @@ static void fake_on_oom(void)
     harness_fail(__FILE__, __LINE__, "unexpected on_oom");
 }
 
-static void fake_on_corrupt(const char * where, object_id_t id)
+static void fake_on_corrupt(obj_handler_t * oh, const char * where, object_id_t id)
 {
     fake_corrupt_count++;
+    fake_corrupt_oh = oh;
     fake_corrupt_where = where;
     fake_corrupt_id = id;
     if (!fake_corrupt_allowed) {
@@ -75,7 +83,7 @@ void fake_dump(void)
     uint32_t i;
     uint32_t shown = 0;
 
-    heap_stats(&st);
+    heap_stats(&fake_oh, &st);
     fprintf(stderr, "---- heap: used %lu, free %lu in %lu blocks, largest %lu, live %lu ----\n",
             (unsigned long)st.used_bytes, (unsigned long)st.free_bytes,
             (unsigned long)st.free_blocks, (unsigned long)st.largest_free,
@@ -118,7 +126,7 @@ void fake_config(uint32_t payload_size, uint32_t handle_count)
 
 void fake_start(void)
 {
-    CHECK_EQ(obj_handler_init(&fake_cfg, &fake_host), OBJ_HANDLER_OK);
+    CHECK_EQ(obj_handler_init(&fake_oh, &fake_cfg, &fake_host), OBJ_HANDLER_OK);
     harness_set_dump(fake_dump);
 }
 

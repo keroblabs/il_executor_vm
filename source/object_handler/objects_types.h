@@ -130,6 +130,53 @@ typedef struct {
     uint8_t  flags;             /* OBJECT_H_ASCII for an ASCII string, else 0 */
 } object_const_t;
 
+/* ---- the instance, one per application (doc 14 section 1) ----------- */
+
+typedef struct obj_handler obj_handler_t;
+
+/* All three required (doc 14 section 7.5); each receives the instance that calls it. */
+typedef struct {
+    /* Bit i set: word i of the payload is an object id. NULL: no ids.
+       For an array type, the bitmap of one element (doc 14 section 5.7). */
+    const uint8_t * (*type_refmap)(obj_handler_t * oh, uint16_t type, uint32_t * words);
+
+    /* on_oom must not return; on_corrupt reports an embedder bug. */
+    void (*on_oom)(obj_handler_t * oh);
+    void (*on_corrupt)(obj_handler_t * oh, const char * where, object_id_t id);
+} obj_handler_host_t;
+
+#define HEAP_HISTOGRAM_BUCKETS  12u     /* bucket k: rounded size <= 8 << k; the last: larger */
+
+typedef struct {                        /* one heap segment, owned by heap.c */
+    uint8_t         * payload;
+    object_handle_t * handles;
+    uint32_t          payload_size;
+    uint32_t          handle_count;
+    uint32_t          top;              /* [top, payload_size) has never been carved */
+    uint32_t          used;
+    uint32_t          peak_used;
+    uint32_t          collect_at;       /* 0: no threshold */
+    uint32_t          handles_used;
+    uint32_t          handle_collect_at;
+    uint16_t          free_head;
+    uint16_t          handle_free_head; /* 0: none */
+    uint16_t          handle_free_tail;
+    uint32_t          histogram[HEAP_HISTOGRAM_BUCKETS];
+} heap_segment_t;
+
+/* The embedder provides it zeroed, as static storage is; every field is the library's. */
+struct obj_handler {
+    object_space_t         spaces[OBJECT_SPACE_COUNT];
+    heap_segment_t         heap[HEAP_SEGMENTS];
+    uint32_t               heap_count;
+    const uint8_t        * const_base;
+    const object_const_t * consts;
+    obj_handler_host_t     host;
+    uint16_t               string_type;
+    uint8_t                gc_requested;
+    uint8_t                ready;
+};
+
 #if !OBJECT_DEBUG_REFS
 OBJECT_STATIC_ASSERT(sizeof(object_handle_t) == 8, handle_is_8_bytes);
 #else

@@ -1,13 +1,9 @@
 #include <string.h>
 #include "obj_handler.h"
 
-obj_handler_host_t obj_handler_host;
-
-static int obj_handler_ready;
-
-int obj_handler_is_ready(void)
+int obj_handler_is_ready(obj_handler_t * oh)
 {
-    return obj_handler_ready;
+    return oh->ready;
 }
 
 static int obj_handler_statics_ok(const obj_handler_config_t * cfg)
@@ -21,7 +17,8 @@ static int obj_handler_statics_ok(const obj_handler_config_t * cfg)
     return cfg->statics_refmap == NULL || (cfg->statics_refmap[0] & 0x03u) == 0;
 }
 
-static int obj_handler_const_ok(const obj_handler_config_t * cfg, const obj_handler_host_t * host,
+static int obj_handler_const_ok(obj_handler_t * oh, const obj_handler_config_t * cfg,
+                                const obj_handler_host_t * host,
                                 const object_const_t * c, uint32_t table_bytes)
 {
     const uint8_t * p;
@@ -47,10 +44,11 @@ static int obj_handler_const_ok(const obj_handler_config_t * cfg, const obj_hand
             return 0;
     }
     /* A constant never holds an id (doc 14 section 3.5). */
-    return host->type_refmap(c->type, &words) == NULL;
+    return host->type_refmap(oh, c->type, &words) == NULL;
 }
 
-static int obj_handler_consts_ok(const obj_handler_config_t * cfg, const obj_handler_host_t * host)
+static int obj_handler_consts_ok(obj_handler_t * oh, const obj_handler_config_t * cfg,
+                                 const obj_handler_host_t * host)
 {
     const object_const_t * table = (const object_const_t *)(const void *)cfg->const_base;
     uint32_t table_bytes;
@@ -65,19 +63,19 @@ static int obj_handler_consts_ok(const obj_handler_config_t * cfg, const obj_han
     if (cfg->const_size < table_bytes)
         return 0;
     for (i = 1; i < cfg->const_count; i++)
-        if (!obj_handler_const_ok(cfg, host, &table[i], table_bytes))
+        if (!obj_handler_const_ok(oh, cfg, host, &table[i], table_bytes))
             return 0;
     return 1;
 }
 
-obj_handler_status_t obj_handler_init(const obj_handler_config_t * cfg,
-                                      const obj_handler_host_t   * host)
+obj_handler_status_t obj_handler_init(obj_handler_t * oh, const obj_handler_config_t * cfg,
+                                      const obj_handler_host_t * host)
 {
     uint32_t i;
 
-    if (cfg == NULL || host == NULL)
+    if (oh == NULL || cfg == NULL || host == NULL)
         return OBJ_HANDLER_E_ARG_NULL;
-    if (obj_handler_ready)
+    if (oh->ready)
         return OBJ_HANDLER_E_ALREADY_INIT;
     if (cfg->segments == 0 || cfg->segments > HEAP_SEGMENTS)
         return OBJ_HANDLER_E_SEGMENTS;
@@ -98,26 +96,24 @@ obj_handler_status_t obj_handler_init(const obj_handler_config_t * cfg,
         return OBJ_HANDLER_E_HOST_CALLBACK;
     if (!obj_handler_statics_ok(cfg))
         return OBJ_HANDLER_E_STATICS;
-    if (!obj_handler_consts_ok(cfg, host))
+    if (!obj_handler_consts_ok(oh, cfg, host))
         return OBJ_HANDLER_E_CONST;
 
     /* Every check has passed; nothing is written before this point. */
-    obj_handler_host = *host;
-    objects_init(cfg->statics, cfg->statics_size, cfg->const_base, cfg->const_count);
+    memset(oh, 0, sizeof *oh);
+    oh->host = *host;
+    objects_init(oh, cfg->statics, cfg->statics_size, cfg->const_base, cfg->const_count);
     for (i = 0; i < cfg->segments; i++)
-        heap_segment_init(i, cfg->segment[i].payload, cfg->segment[i].payload_size,
+        heap_segment_init(oh, i, cfg->segment[i].payload, cfg->segment[i].payload_size,
                           cfg->segment[i].handles, cfg->segment[i].handle_count,
                           cfg->segment[i].gc_threshold_pct, cfg->segment[i].gc_handle_pct);
-    obj_string_init(cfg->string_type);
-    obj_handler_ready = 1;
+    oh->string_type = cfg->string_type;
+    oh->ready = 1;
     return OBJ_HANDLER_OK;
 }
 
-void obj_handler_shutdown(void)
+void obj_handler_shutdown(obj_handler_t * oh)
 {
-    heap_shutdown();
-    obj_string_init(0);
-    objects_shutdown();
-    memset(&obj_handler_host, 0, sizeof obj_handler_host);
-    obj_handler_ready = 0;
+    heap_shutdown(oh);
+    memset(oh, 0, sizeof *oh);
 }

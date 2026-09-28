@@ -13,14 +13,14 @@ static const object_handle_t * handle_of(object_id_t id)
 static void round_trip(const void * value, uint32_t bytes)
 {
     uint8_t out[16];
-    object_id_t box = value_box(FAKE_T_DATA, value, bytes);
+    object_id_t box = value_box(&fake_oh, FAKE_T_DATA, value, bytes);
 
     CHECK(box != OBJECT_NULL);
-    CHECK_EQ(objects_kind_of(box), OBJECT_K_BOX);
-    CHECK_EQ(objects_size_of(box), bytes);
+    CHECK_EQ(objects_kind_of(&fake_oh, box), OBJECT_K_BOX);
+    CHECK_EQ(objects_size_of(&fake_oh, box), bytes);
     CHECK(!(handle_of(box)->flags & OBJECT_H_HASREFS));
     memset(out, 0xEE, sizeof out);
-    value_unbox(box, out, bytes);
+    value_unbox(&fake_oh, box, out, bytes);
     CHECK(memcmp(out, value, bytes) == 0);
     CHECK_EQ(out[bytes], 0xEE);                 /* nothing past the value is written */
 }
@@ -53,7 +53,7 @@ TEST_CASE(box_round_trips_every_primitive)
     round_trip(&r8, sizeof r8);
     round_trip(&b1, sizeof b1);
     round_trip(&ni, sizeof ni);
-    CHECK(heap_verify());
+    CHECK(heap_verify(&fake_oh));
 }
 
 TEST_CASE(box_copies_the_value)
@@ -63,9 +63,9 @@ TEST_CASE(box_copies_the_value)
     object_id_t box;
 
     fake_init(PAYLOAD, HANDLES);
-    box = value_box(FAKE_T_DATA, &v, sizeof v);
+    box = value_box(&fake_oh, FAKE_T_DATA, &v, sizeof v);
     v = 42;
-    value_unbox(box, &out, sizeof out);
+    value_unbox(&fake_oh, box, &out, sizeof out);
     CHECK_EQ(out, 41);
 }
 
@@ -75,9 +75,9 @@ TEST_CASE(boxed_struct_with_an_id_is_scanned)
     object_id_t box;
 
     fake_init(PAYLOAD, HANDLES);
-    box = value_box(FAKE_T_MIXED, pair, sizeof pair);
+    box = value_box(&fake_oh, FAKE_T_MIXED, pair, sizeof pair);
     CHECK(handle_of(box)->flags & OBJECT_H_HASREFS);
-    CHECK_EQ(objects_type_of(box), FAKE_T_MIXED);
+    CHECK_EQ(objects_type_of(&fake_oh, box), FAKE_T_MIXED);
 }
 
 TEST_CASE(box_of_an_empty_struct)
@@ -85,10 +85,10 @@ TEST_CASE(box_of_an_empty_struct)
     object_id_t box;
 
     fake_init(PAYLOAD, HANDLES);
-    box = value_box(FAKE_T_DATA, NULL, 0);
+    box = value_box(&fake_oh, FAKE_T_DATA, NULL, 0);
     CHECK(box != OBJECT_NULL);
-    CHECK_EQ(objects_size_of(box), 0);
-    value_unbox(box, NULL, 0);
+    CHECK_EQ(objects_size_of(&fake_oh, box), 0);
+    value_unbox(&fake_oh, box, NULL, 0);
     CHECK_EQ(fake_corrupt_count, 0);
 }
 
@@ -97,7 +97,7 @@ TEST_CASE(box_that_can_never_fit_returns_null)
     static uint8_t big[PAYLOAD];
 
     fake_init(PAYLOAD, HANDLES);
-    CHECK(value_box(FAKE_T_DATA, big, PAYLOAD) == OBJECT_NULL);
+    CHECK(value_box(&fake_oh, FAKE_T_DATA, big, PAYLOAD) == OBJECT_NULL);
     CHECK_EQ(fake_oom_count, 0);
 }
 
@@ -109,14 +109,14 @@ TEST_CASE(unbox_misuse_is_corrupt)
     object_id_t arr;
 
     fake_init(PAYLOAD, HANDLES);
-    box = value_box(FAKE_T_DATA, &v, sizeof v);
-    arr = array_create(FAKE_T_DATA, 4, 1);
+    box = value_box(&fake_oh, FAKE_T_DATA, &v, sizeof v);
+    arr = array_create(&fake_oh, FAKE_T_DATA, 4, 1);
     fake_allow_corrupt();
-    value_unbox(box, &out, 8);                  /* the wrong size */
-    value_unbox(arr, &out, 4);                  /* not a box */
-    value_unbox(OBJECT_NULL, &out, 4);
-    value_unbox(box, NULL, 4);
-    CHECK(value_box(FAKE_T_DATA, NULL, 4) == OBJECT_NULL);
+    value_unbox(&fake_oh, box, &out, 8);        /* the wrong size */
+    value_unbox(&fake_oh, arr, &out, 4);        /* not a box */
+    value_unbox(&fake_oh, OBJECT_NULL, &out, 4);
+    value_unbox(&fake_oh, box, NULL, 4);
+    CHECK(value_box(&fake_oh, FAKE_T_DATA, NULL, 4) == OBJECT_NULL);
     CHECK_EQ(fake_corrupt_count, 5);
     CHECK_EQ(out, 0);
 }
