@@ -197,7 +197,7 @@ slice takes from Ruffus, as design rather than code, is in 13 §§4 and 6.
 | D1 error and failure model | **done** — `obj_handler_status_t`, 14 §9.2 |
 | D2 debug object identity | decided; lands in `objects_types.h` with OH-1 |
 | D3 header isolation and naming | names and location decided (`objects_types.h`, `obj_string`, `source/object_handler/`); the isolated build waits for C1 |
-| D4 old `source/framework/` draft | waits for C2 |
+| D4 old `source/framework/` draft | **done** — deleted |
 | OH-T to OH-6 | not started |
 
 ---
@@ -289,9 +289,9 @@ These either land in the first commit's headers or block OH-1.
   is its own directory only; the standalone `-Wall -Wextra -Werror -pedantic`
   build; `enable_testing()` with one test per case; debug and release builds
   (18 D3, OH-1 item 5, OH-T). Depends on A5; A1 is done.
-- [ ] **C2 — D4.** Delete `source/framework/objects.c/.h` and
+- [x] **C2 — D4.** Delete `source/framework/objects.c/.h` and
   `stack.c/.h`: CMake builds only `pool.c` and `critical_section.c` from that
-  directory. Needs the owner's confirmation.
+  directory. *Done:* confirmed by the owner and deleted.
 - [x] **C3 — Ruffus `types.h` on ARM.** Every Ruffus file fails on
   `arm-none-eabi-gcc`, because `types.h` redefines `uint32_t` and `int32_t`
   differently from newlib. *Moot:* the copy is deleted, and the new headers
@@ -316,7 +316,7 @@ These either land in the first commit's headers or block OH-1.
 - [ ] **D2** — debug object identity, written into `objects_types.h`.
 - [ ] **D3** — header isolation: names and location done; the isolated build
   needs C1.
-- [ ] **D4** — the old `source/framework/` draft: C2.
+- [x] **D4** — the old `source/framework/` draft: C2.
 - [ ] **OH-T** — test system: `harness.h`, fake embedder, fault injection,
   replay, CTest (18 §2).
 - [ ] **OH-1** — foundation: types, configuration, spaces, resolution,

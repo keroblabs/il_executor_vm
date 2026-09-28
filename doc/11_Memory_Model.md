@@ -363,7 +363,7 @@ typedef struct {
 } stack_slot_t;            /* 16 bytes */
 ```
 
-This replaces the current [`stack_node_t`](../source/framework/stack.h), which
+This replaces the `stack_node_t` of the deleted `source/framework/` draft, which
 carries 16 bytes of payload where IL needs at most 8. **Re-size it before
 Slice A locks it in.**
 

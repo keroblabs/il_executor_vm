@@ -115,8 +115,7 @@ These belong to **`cli_exec`** and are the starting point for Slice A.
 |-----------------------------------------------------------------------------------------------|--------------|-------------------------------------------------------------------------|
 | [pool.c](../source/framework/pool.c)                                                          | Complete     | Fixed-size block allocator — candidate substrate for the heap's size classes. |
 | [critical_section.c](../source/framework/critical_section.c)                                  | Complete     | Reentrancy guard.                                                       |
-| [stack.h](../source/framework/stack.h), [stack.c](../source/framework/stack.c)                | **Stub**     | `stack_push/pop/peek_at` are empty. Slot format to be re-sized before Slice A — see [11_Memory_Model.md](11_Memory_Model.md). |
-| [objects.h](../source/framework/objects.h), [objects.c](../source/framework/objects.c)        | **Stub**     | `objects.c` is empty; superseded by the handle-heap design.             |
+| `stack.h`, `stack.c`, `objects.h`, `objects.c`                                                | **Deleted**  | Pre-contract draft, removed by [18 D4](18_ObjectHandler_Build_Plan.md); ObjectHandler replaces it. |
 | [exception.h](../source/framework/exception.h)                                                | **Stub**     | `DO_ASSERT` disabled; will host managed-exception unwind.               |
 | [arch.h](../source/framework/arch.h)                                                          | Skeleton     | `n_ptr_t`, `HEAP_ATTR`, `FRAME_ATTR` — hooks for a target port.         |
 
@@ -266,7 +265,7 @@ Detailed background lives in
 
 ### 3.3 Managed heap and object model
 
-The skeletons in [objects.h](../source/framework/objects.h) are superseded by
+The pre-contract skeletons once in `source/framework/` are superseded by
 **ObjectHandler**, a standalone library that owns objects, the heap, the
 per-thread stack and the collector, decomposed one module per responsibility
 — `objects_`, `heap_`, `stack_`, `obj_string_`, `value_`, `array_`, `gc_`. Full
@@ -313,7 +312,8 @@ surrounds it is in [11_Memory_Model.md](11_Memory_Model.md). Summary here.
 
 ### 3.4 The interpreter core
 
-1. **Evaluation stack — implementation of [stack.c](../source/framework/stack.c).**
+1. **Evaluation stack — ObjectHandler's `stack.c`
+   ([18 OH-4](18_ObjectHandler_Build_Plan.md)).**
    Replace the empty function bodies. The existing `stack_node_t` carries
    16 bytes of payload where IL needs at most 8; re-size it before Slice A
    locks it in. Target shape: `{ uint8_t kind; uint8_t flags; uint16_t aux;
@@ -444,7 +444,7 @@ construction.
 
 | Slice | `cli_pack` adds                                                                                  | `cli_exec` adds                                                                                     | Milestone                          |
 |-------|---------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|------------------------------------|
-| **A** | header + TLV directory, `types[]` (size/parent), `methods[]`, `code[]`, token→index rewrite for `call` | image loader, frame arena, eval stack ([stack.c](../source/framework/stack.c)), ~20 opcodes: `ldc.i4*`, `ldloc`/`stloc`, `ldarg`, `add`/`sub`/`mul`, `br*`, `ret`, static `call` | `fib(20)` returns 6765             |
+| **A** | header + TLV directory, `types[]` (size/parent), `methods[]`, `code[]`, token→index rewrite for `call` | image loader, frame arena, eval stack (ObjectHandler `stack.c`), ~20 opcodes: `ldc.i4*`, `ldloc`/`stloc`, `ldarg`, `add`/`sub`/`mul`, `br*`, `ret`, static `call` | `fib(20)` returns 6765             |
 | **B** | field layout, statics slab + reference bitmaps, vtables, interface map, `ldfld`/`stfld` offset rewrite | `newobj`, `ldfld`/`stfld`, `callvirt`, statics, `.cctor`, bump allocator (no collection yet)          | virtual override dispatches correctly |
 | **C** | string literal pool, `bindings[]`, `ldstr` index rewrite                                          | handle heap + tricolour STW GC, `native_bcl` registration/lookup, `System.String`/`System.Array`, `ldstr` | **Hello, World**                   |
 | **D** | `eh[]` section (clauses already parsed)                                                          | unwind walk, `throw`, `rethrow`, `leave`, `endfinally`, `endfilter`                                  | `try/catch/finally`                |

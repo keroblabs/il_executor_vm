@@ -230,8 +230,8 @@ The full set:
 | `heap.h`, `objects.h`, `gc.h`, `stack.h`, `array.h`, `obj_string.h`, `value.h` | one module each | their own |
 
 The `object_handler` target's include path contains **only**
-`source/object_handler/`, so `source/types.h` and `source/framework/objects.h`
-are unreachable from inside the library by construction rather than by
+`source/object_handler/`, so `source/types.h` is unreachable from inside the
+library by construction rather than by
 discipline. 14 §1.1's file list is corrected to match.
 
 Isolation keeps `source/` out of the library; it cannot keep the library's
@@ -258,16 +258,13 @@ target `object_handler`.
 
 ### D4 — The old draft in `source/framework/`
 
-[framework/objects.h](../source/framework/objects.h),
-[framework/stack.h](../source/framework/stack.h) and
-[framework/stack.c](../source/framework/stack.c) are the pre-contract draft
-that 14 §6.6 rejects — `object_t` with a union payload, boxed slots, empty
-stubs. They are still on the `cli_parser` include path.
+`framework/objects.c/.h` and `framework/stack.c/.h` were the pre-contract
+draft that 14 §6.6 rejects — `object_t` with a union payload, boxed slots,
+empty stubs — and were still on the `cli_parser` include path.
 
-Proposal: delete `stack.c`/`stack.h` (doc 00 records them as stubs), and keep
-`objects.h` only if `cli_parser` still compiles against it — confirm with the
-build, do not assume. Leaving a second `objects.h` reachable is how the wrong
-one gets included six weeks from now.
+**Done (2026-09-28): all four deleted.** Nothing included them and CMake built
+neither, so `cli_parser` was unaffected. Leaving a second `objects.h`
+reachable is how the wrong one gets included six weeks from now.
 
 ---
 
