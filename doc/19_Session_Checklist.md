@@ -36,11 +36,12 @@ format (`12_VXB_Format.md`, not yet written) and the `cli_pack` / `cli_exec`
 slices of [00 §4](00_Introduction.md).
 
 **Where the code is.** `source/` holds the parser, which
-[CMakeLists.txt](../CMakeLists.txt) builds into `cli_parser`. `ObjectHandler/`
-holds the Ruffus VM ObjectHandler, copied verbatim in `126dfe2` and changed
-only where §3.2 says; it is **not in the build** yet. Doc 14 places the new
-library in `source/objecthandler/`; which of the two the work continues in is
-decision A1.
+[CMakeLists.txt](../CMakeLists.txt) builds into `cli_parser`. The new
+ObjectHandler is written in `source/object_handler/`, one doc 18 slice at a
+time (A1). `ObjectHandler/` holds the Ruffus VM ObjectHandler, copied
+verbatim in `126dfe2` and changed only where §3.2 says; it is **frozen and in
+no build**, and each of its modules is deleted when the slice that replaces
+it lands.
 
 ---
 
@@ -124,18 +125,20 @@ Decided. Changing one means changing the contract first.
 
 ### 2.6 How every change is verified
 
-1. **Compile every ObjectHandler file twice**, with quoted includes and with
-   `-I ObjectHandler`, and diff the diagnostics against the previous run: no
-   new warning, no new error. Baseline at `476cd6e`: 1 error (`stack.c` needs
-   the missing `vm_debug.h`) and 69 warnings, identical in both modes.
+1. **Compile every file of `source/object_handler/` on its own**, with the
+   include path set to that directory alone and
+   `-Wall -Wextra -Werror -pedantic`, under C99 and C11 until A5 picks one.
+   The baseline is zero diagnostics.
 2. **Prove a behaviour change with a harness** that fails before the change
    and passes after it, one process per case, built with
    `-fsanitize=address,undefined`.
-3. **Anything meant for the device** also goes through the ARM compiler.
+3. **Step 1 runs on the ARM compiler too**: all of the library is device
+   code.
 4. **Once OH-T exists,** `ctest` in the debug, release and standalone builds
    replaces steps 1 and 2 (18 §0).
 
-The commands are in §5.3.
+The Ruffus copy is frozen (A1) and no longer compiled; its last baseline, at
+`476cd6e`, was 1 error and 69 warnings. The commands are in §5.3.
 
 ---
 
@@ -191,7 +194,7 @@ The commands are in §5.3.
 |---|---|
 | D1 error and failure model | **done** — `obj_handler_status_t`, 14 §9.2 |
 | D2 debug object identity | decided; lands in `objects_types.h` with OH-1 |
-| D3 header isolation and naming | names decided (`objects_types.h`, `obj_string`); the isolated build waits for C1 |
+| D3 header isolation and naming | names and location decided (`objects_types.h`, `obj_string`, `source/object_handler/`); the isolated build waits for C1 |
 | D4 old `source/framework/` draft | waits for C2 |
 | OH-T to OH-6 | not started |
 
@@ -207,12 +210,12 @@ the answer is written down.
 
 These either land in the first commit's headers or block OH-1.
 
-- [ ] **A1 — Strategy and code location.** Keep patching the Ruffus copy in
-  `ObjectHandler/`, or start OH-1 as new files in `source/objecthandler/`
-  (14 §1.1, 18 D3) and replace the Ruffus modules slice by slice.
-  *Recommended:* new files. The Ruffus model — 16-bit ids, no handle table,
-  a three-list collector, boxed stack slots — differs from doc 14 at the
-  root, so each further patch buys less. *Record in:* 18 D3 and §3.2 here.
+- [x] **A1 — Strategy and code location.** *Decided 2026-09-28:* new files
+  in `source/object_handler/` — snake_case, not `objecthandler` — replacing
+  the Ruffus modules slice by slice. The Ruffus copy is frozen: no further
+  patches, in no build, each module deleted when its replacement lands
+  (§3.2). Tests go in `tests/object_handler/`; the CMake target is
+  `object_handler`. *Recorded in:* 18 D3 and §12, 14 §1.1, 13 §4.
 - [ ] **A2 — Concurrency contract.** State that ObjectHandler is not
   re-entrant and is called from one thread only; doc 17 guarantees one OS
   thread, but nothing tells a third-party embedder. *Record in:* 14 §1.
@@ -226,8 +229,10 @@ These either land in the first commit's headers or block OH-1.
   and §5.3.
 - [ ] **A5 — Compiler baseline.** Define `LIKELY`/`UNLIKELY` with a fallback
   for non-GCC compilers — 14 §3.3 and 17 §4.2 use them, nothing defines them —
-  and pin the C standard (C99 or C11) and the warning flags. *Record in:*
-  14 §1.1, 18 OH-1.
+  and pin the C standard (C99 or C11) and the warning flags. Pick one line
+  ending for `source/object_handler/` as well: `obj_handler.h` came from
+  Ruffus as CRLF, and new files will be LF. *Record in:* 14 §1.1, 18 OH-1,
+  §2.4 here.
 - [ ] **A6 — Reserve the literal-table fields.** The interned-literal table
   is a root (14 §7.4) with no field in `obj_handler_config_t` (14 §9). The
   struct is the embedder's compile-time contract and freezes in OH-1; its
@@ -277,33 +282,36 @@ These either land in the first commit's headers or block OH-1.
 
 ### C. Build and code chores
 
-- [ ] **C1 — CMake.** An `objecthandler` static library whose include path is
-  its own directory only; the standalone `-Wall -Wextra -Werror -pedantic`
+- [ ] **C1 — CMake.** An `object_handler` static library whose include path
+  is its own directory only; the standalone `-Wall -Wextra -Werror -pedantic`
   build; `enable_testing()` with one test per case; debug and release builds
-  (18 D3, OH-1 item 5, OH-T). Depends on A1 and A5.
+  (18 D3, OH-1 item 5, OH-T). Depends on A5; A1 is done.
 - [ ] **C2 — D4.** Delete `source/framework/objects.c/.h` and
   `stack.c/.h`: CMake builds only `pool.c` and `critical_section.c` from that
   directory. Needs the owner's confirmation.
-- [ ] **C3 — Ruffus `types.h` on ARM.** Every Ruffus file fails on
+- [x] **C3 — Ruffus `types.h` on ARM.** Every Ruffus file fails on
   `arm-none-eabi-gcc`, because `types.h` redefines `uint32_t` and `int32_t`
-  differently from newlib. Moot once OH-1's headers use `<stdint.h>`; fix it
-  only if a Ruffus module must build for the device before then.
-- [ ] **C4 — `stack.c`** includes `vm_debug.h`, which was not copied over.
-  Moot once OH-4 replaces it.
-- [ ] **C5 — Ruffus `heap.c` bugs.** A failed allocation walks off the end
+  differently from newlib. *Moot:* A1 froze the copy, and the new headers use
+  `<stdint.h>`.
+- [x] **C4 — `stack.c`** includes `vm_debug.h`, which was not copied over.
+  *Moot:* A1 froze the copy.
+- [x] **C5 — Ruffus `heap.c` bugs.** A failed allocation walks off the end
   of the heap and reports "corrupted" instead of out-of-memory; `heap_init`
   truncates a buffer over 64 KB; blocks are 4-byte aligned but hold 8-byte
-  pointers on a 64-bit host. Moot once OH-2 replaces it.
+  pointers on a 64-bit host. *Moot:* A1 froze the copy. The new code covers
+  the same ground: OH-2's exhaustion tests and alignment check (18 §4), and
+  `E_PAYLOAD_SIZE` (14 §9.2).
 - [ ] **C6 — `obj_string_split`** moves to the embedder as a native: under
   14 §5.7 it needs the embedder's type id for `string[]`.
 - [ ] **C7 — Test harnesses.** The heap and array harnesses of 2026-09-25
-  lived only in `/tmp`; OH-T recreates them in `tests/objecthandler/`.
+  lived only in `/tmp`; OH-T recreates them in `tests/object_handler/`.
 
 ### D. Build plan slices — doc 18
 
 - [x] **D1** — error and failure model: `obj_handler_status_t` (`e444cb9`).
 - [ ] **D2** — debug object identity, written into `objects_types.h`.
-- [ ] **D3** — header isolation: names done; the isolated build needs C1.
+- [ ] **D3** — header isolation: names and location done; the isolated build
+  needs C1.
 - [ ] **D4** — the old `source/framework/` draft: C2.
 - [ ] **OH-T** — test system: `harness.h`, fake embedder, fault injection,
   replay, CTest (18 §2).
@@ -357,31 +365,20 @@ These either land in the first commit's headers or block OH-1.
 ```bash
 cd /home/wifi/projects/cli_parser
 
-# 1. Every ObjectHandler file, both include modes; diff against the last run.
-for mode in quote I; do
-  for f in ObjectHandler/*.c; do
-    extra=""; [[ $mode == I ]] && extra="-IObjectHandler"
-    gcc -std=gnu11 -fsyntax-only -Wall -Wextra -DWANT_OBJECT_HANDLER $extra "$f" 2>&1 |
-      grep -E "(error|warning):" | sed -E 's/:[0-9]+:[0-9]+:/:/' | sed "s|^|$(basename $f): |"
-  done | sort > /tmp/diag_$mode.txt
+# 1 and 3. Every library file on its own: host and device, C99 and C11 (A5).
+for cc in gcc "/home/wifi/gcc_toolchain/bin/arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb"; do
+  for std in c99 c11; do
+    for f in source/object_handler/*.[ch]; do
+      $cc -std=$std -fsyntax-only -Wall -Wextra -Werror -pedantic \
+        -I source/object_handler -x c "$f" || echo "FAIL: $cc -std=$std $f"
+    done
+  done
 done
 
-# 2. The device compiler.
-/home/wifi/gcc_toolchain/bin/arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb \
-  -std=gnu11 -fsyntax-only -DWANT_OBJECT_HANDLER ObjectHandler/heap.c
-
-# 3. A harness against the Ruffus modules, one case per process.
-gcc -std=gnu11 -g -O0 -fsanitize=address,undefined -DWANT_OBJECT_HANDLER \
-  -iquote ObjectHandler test.c ObjectHandler/objects.c ObjectHandler/heap.c \
-  ObjectHandler/arrays_type.c ObjectHandler/obj_string.c -o test
+# 2. A harness against the library, one case per process.
+gcc -std=c11 -g -O0 -fsanitize=address,undefined -I source/object_handler \
+  test.c source/object_handler/*.c -o test
 ```
-
-A harness against the Ruffus modules must define `app_instance_t * app_instance`
-and `void object_garbage_collection(void)`, and give `heap_init` a buffer with
-8 zeroed bytes past its end: because of C5, a failed allocation walks one
-header past the heap, and the zeroed header stops it. Expect pre-existing
-UBSan alignment reports from `heap.c` (C5); none may come from the code under
-test.
 
 ---
 

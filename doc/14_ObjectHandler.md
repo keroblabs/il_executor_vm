@@ -49,7 +49,7 @@ The decomposition is Ruffus's, kept deliberately: one module per
 responsibility, one prefix per module.
 
 ```
-source/objecthandler/
+source/object_handler/
     obj_handler.h         /* umbrella header — includes the modules below  */
     obj_handler_config.h  /* the single configuration + debug switches     */
     objects_types.h       /* object_id_t, spaces, kinds — shared vocabulary*/

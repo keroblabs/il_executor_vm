@@ -215,7 +215,7 @@ pointer in the free list and is worth having either way.
 
 [CMakeLists.txt](../CMakeLists.txt) already puts `./source` on the include
 path, and [source/types.h](../source/types.h) lives there — so 14 §1.1's
-`source/objecthandler/types.h` is ambiguous the day both are on a path. The
+`source/object_handler/types.h` is ambiguous the day both are on a path. The
 same argument applies to `objects.h`, which already exists twice.
 
 **Decision: the header keeping the shared vocabulary is `objects_types.h`**,
@@ -229,8 +229,8 @@ The full set:
 | `obj_handler.h` | umbrella; `obj_handler_init/shutdown`, `obj_handler_config_t`, `obj_handler_host_t`, `obj_handler_status_t` | `obj_handler_` |
 | `heap.h`, `objects.h`, `gc.h`, `stack.h`, `array.h`, `obj_string.h`, `value.h` | one module each | their own |
 
-The `objecthandler` target's include path contains **only**
-`source/objecthandler/`, so `source/types.h` and `source/framework/objects.h`
+The `object_handler` target's include path contains **only**
+`source/object_handler/`, so `source/types.h` and `source/framework/objects.h`
 are unreachable from inside the library by construction rather than by
 discipline. 14 §1.1's file list is corrected to match.
 
@@ -243,6 +243,16 @@ errors under `-I`. **Decision: the string module is `obj_string`** — file,
 off `str` + lowercase, reserved for `<string.h>` by C11 §7.31.13. Every other
 name in the table was checked against the standard and common POSIX headers,
 on host gcc and `arm-none-eabi-gcc`, and is clean.
+
+**Location (2026-09-28): `source/object_handler/`, written new.** The
+library is a new implementation beside the Ruffus copy in `ObjectHandler/`,
+not a run of patches to that copy: the Ruffus model — 16-bit ids, no handle
+table, a three-list collector, boxed stack slots — differs from doc 14 at the
+root, so each patch bought less than the one before. The copy is frozen and
+in no build; each Ruffus module is deleted when the slice that replaces it
+lands, and [19 §3.2](19_Session_Checklist.md) maps module to slice. The
+directory is snake_case like `source/row_table/`, and the rest follows it:
+`tests/object_handler/`, CMake target `object_handler`.
 
 ### D4 — The old draft in `source/framework/`
 
@@ -329,8 +339,8 @@ covered; there is no other way to reach them.
 ### 2.4 Tree
 
 ```
-source/objecthandler/          the library — no test code, ever
-tests/objecthandler/
+source/object_handler/         the library — no test code, ever
+tests/object_handler/
     harness.h                  L1 — asserts, {name, fn} table, dump-on-failure
     fake_embedder.c/.h         L2
     faults.c/.h                L5
@@ -391,7 +401,7 @@ initialises from a caller-supplied config and refuses a malformed one.
    enum order (14 §9.2): `E_ARG_NULL`, `E_ALREADY_INIT`, `E_SEGMENTS`,
    `E_PAYLOAD_BASE`, `E_PAYLOAD_SIZE`, `E_HANDLES`, `E_WORKLIST`,
    `E_HOST_CALLBACK`. Nothing is written until every check has passed.
-5. CMake: `objecthandler` static library with an isolated include path (D3);
+5. CMake: `object_handler` static library with an isolated include path (D3);
    the 14 §1.1 standalone job; CTest wiring for the three builds.
 
 **Done when:**
@@ -695,6 +705,7 @@ and OH-4, not deferred.
 | Debug object identity | **Approved: 8-bit space / 8-bit generation / 16-bit index in debug builds**, release unchanged at 16/16. Both mechanisms adopted — the generation check and the free-handle quarantine. Folded into the contract at 14 §2.1, §3.2, §3.4 and §11 |
 | Init status (2026-09-25) | **`obj_handler_status_t`, returned by `obj_handler_init` only**: eight codes in OH-1, one per thing the embedder has to fix, appended per slice. Errors are returned before init and go to `on_corrupt` after it, so `objects_space_register` is `void`. `HEAP_MAX_PAYLOAD` is 65536 — D1, 14 §9.2 |
 | Array model (2026-09-25) | **Kept, and cut back to what a CIL array is**: one-dimensional, inline elements, fixed length. The type's refmap describes one element; `array_range_ptr` is the only range check; the header moves to `objects_types.h`. Ruffus's list operations are dropped — 14 §5.7 |
+| Location (2026-09-28) | **`source/object_handler/`, a new implementation**, not patches to the Ruffus copy. The copy in `ObjectHandler/` is frozen and retired module by module as the slices replace it. Tests in `tests/object_handler/`, CMake target `object_handler` — D3 |
 
 **Nothing remains open.** D5, D6, D7 and D9 (§9) are scheduled decisions, not
 unresolved ones: each is taken at the start of the slice that consumes it,
