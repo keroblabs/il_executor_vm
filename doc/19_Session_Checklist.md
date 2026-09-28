@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-28**, at commit `1fe5476`.
+State recorded here: **2026-09-28**, at commit `92ff6ea`.
 
 ---
 
@@ -131,7 +131,7 @@ Decided. Changing one means changing the contract first.
    and standalone — the library configured on its own, which proves it
    reaches nothing in `source/`. Every case runs in its own process; a case
    that means something in one build only exits 77 and is reported as
-   skipped. Baseline: 54 cases pass, with zero warnings.
+   skipped. Baseline: 81 cases pass, with zero warnings.
 2. **Every library file on its own, through the ARM compiler** and host gcc,
    C99 and C11, debug and release switches. Baseline: zero diagnostics.
 3. **A behaviour change is proved by a case** that fails before the change
@@ -165,6 +165,9 @@ The commands are in §5.3.
 | `745922d` | D4: the `source/framework/` objects and stack draft deleted |
 | `7ff3a8f` | OH-1: ids, config, spaces, resolution, init; harness, fake embedder, CMake/CTest |
 | `1fe5476` | OH-2: allocator, free list, `heap_release`, `heap_verify`, stats; `objects_create`/`clone`/`pin` |
+| `dcded70` | OH-1/OH-2 decisions folded into docs 14 and 18; checklist |
+| `a1faa16` | D9 decided; OH-5 moved before OH-3 and OH-4 |
+| `92ff6ea` | OH-5: arrays, UTF-8 strings, boxing; interning and `value_compare` wait |
 
 ### 3.2 Code, file by file
 
@@ -178,14 +181,18 @@ The commands are in §5.3.
 | `obj_handler.c/.h` | the umbrella: status codes, host and config structs, `obj_handler_init` with its eight checks, `obj_handler_shutdown` | OH-1 |
 | `heap.c/.h` | first fit with coalescing, bump top, handle free list with quarantine, generations, guard headers and poisoning in debug, `heap_verify`, `heap_stats` | OH-2 |
 | `gc.c/.h` | stub: `gc_request` and `gc_collect` do nothing until OH-3 | OH-2 |
+| `array.c/.h` | `array_create`, length, the one range check, element pointer and byref, overlap-safe copy through the barrier, clear | OH-5 |
+| `obj_string.c/.h` | strict UTF-8 validation, create, concat, `Length` and `char_at` in UTF-16 units, `OBJECT_H_ASCII` | OH-5 |
+| `value.c/.h` | `value_box`, `value_unbox`; `value_compare` comes with OH-4 | OH-5 |
 | `CMakeLists.txt` | target `object_handler`; configured on its own, it is the standalone build and adds the tests | OH-1 |
 
 `tests/object_handler/`: `harness.c/.h` (L1), `fake_embedder.c/.h` (L2),
-`test_objects.c` (25 cases) and `test_heap.c` (29 cases, among them two
-seeded 64 KB tortures and deliberate-damage cases that `heap_verify` must
-catch).
+`test_objects.c` (25 cases), `test_heap.c` (29, among them two seeded 64 KB
+tortures and deliberate-damage cases that `heap_verify` must catch),
+`test_array_string.c` (21, among them a 22-row UTF-8 table) and
+`test_value.c` (6).
 
-Release build for Cortex-M4 at `-Os`: 4,052 bytes of `.text`, 436 of `.bss`.
+Release build for Cortex-M4 at `-Os`: 6,286 bytes of `.text`, 438 of `.bss`.
 Nothing carried over from the Ruffus copy except `obj_handler.h`'s status
 enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 
@@ -217,7 +224,8 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 | OH-T | L1, L2 and L7 done; L3, L5 and L6 in part (§4 D) |
 | OH-1 | **done** — `7ff3a8f` |
 | OH-2 | **done** — `1fe5476` |
-| OH-3 to OH-6 | not started |
+| OH-5 | **built** — `92ff6ea`; interning (OH-3), `value_compare` (OH-4) and the tracing test (OH-3) wait |
+| OH-3, OH-4, OH-6 | not started |
 
 ---
 
@@ -354,10 +362,10 @@ These either land in the first commit's headers or block OH-1.
   (includes B3).
 - [ ] **OH-4** — stack: threads, slots, frames (18 §6).
 - [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
-  (18 §7), now built before OH-3 and OH-4. D9 decided (14 §5.6). Waiting
-  for later slices: `obj_string_intern` (OH-3, D7), `value_compare` (OH-4,
-  B6) and the tracing test (OH-3). `String.Split` stays out of
-  `obj_string.c`: it needs the embedder's `string[]` type id (C6).
+  (18 §7), built before OH-3 and OH-4 (`92ff6ea`). D9 decided (14 §5.6).
+  Still open, each waiting for its slice: `obj_string_intern` (OH-3, D7),
+  `value_compare` (OH-4, B6) and the tracing test (OH-3). `String.Split` stays
+  out of `obj_string.c`: it needs the embedder's `string[]` type id (C6).
 - [ ] **OH-6** — hardening: sanitizers, coverage, 32-bit `-Os` build,
   statistics dump (18 §8).
 
@@ -437,6 +445,18 @@ rm -rf "$d"
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-28, third part** — OH-5 moved before OH-3 and OH-4 at the
+  owner's request, and D9 decided: a NUL-terminated UTF-8 payload,
+  `OBJECT_H_ASCII`, `Length` and `obj_string_char_at` in UTF-16 units,
+  `OBJECT_NULL` for invalid UTF-8, `string_type` in the config (`a1faa16`).
+  **OH-5 built** (`92ff6ea`): arrays per 14 §5.7, strings per D9, boxing.
+  Nothing was ported from Ruffus: its strings are mutable NUL-terminated
+  ASCII and its boxing is the model 14 §6.6 rejects; the array range check
+  and overflow guard of `476cd6e` carried over as logic. 81 cases pass in the
+  three builds; the library is 6.3 KB for Cortex-M4. Two mutants were caught.
+  Waiting: interning (OH-3, D7), `value_compare` (OH-4, B6), the tracing test
+  (OH-3).
 
 - **2026-09-28, second part** — A2–A13 decided in one round, as recommended,
   and recorded (`b999151`); D4 done (`745922d`). **OH-1 built:** ids in both

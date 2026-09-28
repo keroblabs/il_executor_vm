@@ -45,7 +45,7 @@ is what makes every item below testable without the rest of the system.
 | ~~OH-2~~ | ~~Allocator: `heap.c`, free list, `heap_release`, `heap_verify`, stats~~ | **P2** | L | OH-1 | done — `1fe5476` |
 | OH-3 | Collector: `gc.c`, roots, scopes, triggers | **P3** | L | OH-2, D5–D7 | §5 tests |
 | OH-4 | Stack: threads, slots, frames | **P4** | M | OH-3 | §6 tests |
-| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9; interning with OH-3, `value_compare` with OH-4 | §7 tests |
+| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9; interning with OH-3, `value_compare` with OH-4 | §7 tests — built in `92ff6ea` except the three pieces of §7 |
 | OH-6 | Hardening: sanitizers, coverage, 32-bit release build, stats dump | **P6** | M | OH-2 onward | §8 tests |
 
 D5, D6, D7 and D9 are decisions too, but they are **not** P0: each is consumed
@@ -349,6 +349,7 @@ tests/object_handler/
     test_gc.c                  OH-3
     test_stack.c               OH-4
     test_array_string.c        OH-5
+    test_value.c               OH-5 — boxing
     torture.c                  OH-2 and OH-3, driven by oracle + replay
     regressions/               failing seeds, one file each, never deleted
 ```
@@ -634,6 +635,11 @@ truncated / surrogate / empty) with an expected verdict per row; box→unbox
 round-trip for every primitive kind; a `value_compare` matrix over every
 slot-kind pair.
 
+**Built (2026-09-28, `92ff6ea`):** everything above except the tracing test
+(OH-3), the `value_compare` matrix (OH-4) and interning (OH-3, D7). Two
+mutants — an overlong three-byte form accepted, an off-by-one range check —
+were each caught by the suite.
+
 ---
 
 ## 8. OH-6 — Hardening and instrumentation
@@ -721,6 +727,7 @@ and OH-4, not deferred.
 | Pre-OH-1 decisions (2026-09-28) | [19](19_Session_Checklist.md) A2–A13 and D4, accepted as recommended. Recorded in 14 §§1, 1.1, 3.2, 3.4, 5.2, 7.4, 7.5, 9 and 9.2, and here in D1, D2, §3, §4 and §5 |
 | Coding OH-1 and OH-2 (2026-09-28) | Debug switches default from `NDEBUG`, each overridable with `-D`. `heap_verify` returns 1 or 0 and reports the first fault: release checks order, ranges, accounting and coverage by sums, and `HEAP_DEBUG` adds an exact address walk through the guard headers. A free block that reaches the untouched top rejoins it. The standalone build is `source/object_handler/` configured on its own, which also adds the tests. The per-file recipe compiles each header through a one-line wrapper, since a macro-only header is an empty unit under `-pedantic` |
 | OH-5 first, D9 (2026-09-28) | OH-5 is built before OH-3 and OH-4; interning, `value_compare` and the tracing test wait for their slices (§7). D9: a NUL-terminated UTF-8 payload, `OBJECT_H_ASCII`, `Length` and `obj_string_char_at` in UTF-16 units, `OBJECT_NULL` for invalid UTF-8, `string_type` in the config — 14 §5.6 |
+| Coding OH-5 (2026-09-28) | The element-refmap check in `array_create` sits under `OBJECT_DEBUG_REFS`. Reference arrays copy through the barrier element by element; everything else by `memmove`. Boxing tests live in `test_value.c`, which the §2.4 tree gains |
 
 **Nothing remains open before OH-3:** A1–A13 are settled
 ([19 §4](19_Session_Checklist.md)). D5, D6, D7 and D9 (§9) are scheduled decisions, not
