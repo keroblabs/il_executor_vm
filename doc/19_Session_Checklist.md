@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-28**, at commit `358f7c2`.
+State recorded here: **2026-09-28**, at commit `b3dd1bf`.
 
 ---
 
@@ -157,6 +157,8 @@ The commands are in §5.3.
 | `360c37a` | A1: the new library goes in `source/object_handler/`; docs 13, 14, 18, 19 synced |
 | `0cf74cf` | `obj_handler.h` moved to `source/object_handler/` |
 | `358f7c2` | `obj_handler.h`: Ruffus includes dropped |
+| `5d63f74` | checklist: session record |
+| `b3dd1bf` | the rest of the Ruffus copy deleted; docs 18, 19 synced |
 
 ### 3.2 Code, file by file
 
@@ -394,13 +396,15 @@ gcc -std=c11 -g -O0 -fsanitize=address,undefined -I source/object_handler \
 Newest first. One entry per session: what changed, and the commits.
 
 - **2026-09-28** — A1 decided: the new ObjectHandler is written in
-  `source/object_handler/` — snake_case, not `objecthandler` — and the Ruffus
-  copy is frozen, each module to be deleted when its slice lands; docs 13,
-  14, 18 and 19 synced (`360c37a`). `obj_handler.h` moved there (`0cf74cf`)
-  and cut to its guard and `obj_handler_status_t` (`358f7c2`); it compiles on
-  its own with `-Werror -pedantic`, C99 and C11, host and ARM. The
-  verification recipes now target the new directory. C3–C5 closed as moot;
-  the new directory's line endings added to A5.
+  `source/object_handler/` — snake_case, not `objecthandler`; docs 13, 14, 18
+  and 19 synced (`360c37a`). `obj_handler.h` moved there (`0cf74cf`) and cut
+  to its guard and `obj_handler_status_t` (`358f7c2`); it compiles on its own
+  with `-Werror -pedantic`, C99 and C11, host and ARM. The verification
+  recipes now target the new directory. Every other Ruffus file was reviewed
+  against doc 14 and none is reusable, so the owner had `ObjectHandler/`
+  deleted (`b3dd1bf`), closing C3–C6. New findings: B6 (Ruffus has no
+  promotion table for `value_compare`), Ruffus's broken number formatting
+  (E, doc 09), and the new directory's line endings (A5).
 
 - **2026-09-25** — Reviewed docs 00–18 for readiness. Heap allocator widened
   to `uint32_t` (`cf433a6`). `strings` renamed to `obj_string`, files and
