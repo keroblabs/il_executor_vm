@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-25**, at commit `476cd6e`.
+State recorded here: **2026-09-28**, at commit `358f7c2`.
 
 ---
 
@@ -155,12 +155,25 @@ The Ruffus copy is frozen (A1) and no longer compiled; its last baseline, at
 | `cf433a6` | the heap allocator takes `uint32_t` and rejects oversized requests |
 | `e444cb9` | `obj_handler_status_t` (D1); 14 §9.2 |
 | `476cd6e` | arrays: contract in 14 §5.7; `arrays_type` cut down and fixed |
+| `ddd6dde` | this checklist |
+| `360c37a` | A1: the new library goes in `source/object_handler/`; docs 13, 14, 18, 19 synced |
+| `0cf74cf` | `obj_handler.h` moved to `source/object_handler/` |
+| `358f7c2` | `obj_handler.h`: Ruffus includes dropped |
 
-### 3.2 Code — the Ruffus copy, file by file
+### 3.2 Code, file by file
+
+**`source/object_handler/`** — the new library (A1):
+
+| File | State | Grows in |
+|---|---|---|
+| `obj_handler.h` | include guard and `obj_handler_status_t` (D1); compiles on its own, host and ARM, C99 and C11 | OH-1: init, config and host structs, and an include for each module header as it lands |
+
+**`ObjectHandler/`** — the Ruffus copy, frozen and in no build (A1). Each
+module is deleted when the slice in the last column replaces it:
 
 | File | State | Replaced by |
 |---|---|---|
-| `heap.c/.h` | allocator takes `uint32_t` (`cf433a6`); other known bugs open — C5 | OH-2 |
+| `heap.c/.h` | allocator takes `uint32_t` (`cf433a6`); other known bugs in C5 | OH-2 |
 | `objects.c/.h` | unchanged: 16-bit `object_t`, `CONST_OBJECT_ID` threshold | OH-1 (`objects_types.h`, `objects.c`) |
 | `gc.c/.h` | unchanged: three colour lists, O(n²) search | OH-3 |
 | `stack.c/.h` | unchanged: boxed slots, rejected by 14 §6.6; `stack.c` needs the missing `vm_debug.h` | OH-4 |
@@ -168,8 +181,7 @@ The Ruffus copy is frozen (A1) and no longer compiled; its last baseline, at
 | `arrays_type.c/.h` | cut to create, length, range pointer and element pointer, overflow-safe (`476cd6e`) | OH-5 (`array.c`) |
 | `value_type.c/.h` | unchanged: boxing helpers, rejected by 14 §6.6 | OH-5 (`value.c`) |
 | `instance.c/.h` | unchanged: hidden `app_instance` global, rejected by 14 §6.6 | OH-1 (`obj_handler_init`, host struct) |
-| `obj_handler.h` | umbrella, include guard, `obj_handler_status_t` (`e444cb9`) | kept; gains init, config and host structs in OH-1 |
-| `types.h` | unchanged; fails on the ARM compiler — C3 | `<stdint.h>` (14 §1.1) |
+| `types.h` | unchanged; fails on the ARM compiler — C3 | OH-1 (`<stdint.h>`, 14 §1.1) |
 
 ### 3.3 Documents
 
@@ -385,6 +397,15 @@ gcc -std=c11 -g -O0 -fsanitize=address,undefined -I source/object_handler \
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-28** — A1 decided: the new ObjectHandler is written in
+  `source/object_handler/` — snake_case, not `objecthandler` — and the Ruffus
+  copy is frozen, each module to be deleted when its slice lands; docs 13,
+  14, 18 and 19 synced (`360c37a`). `obj_handler.h` moved there (`0cf74cf`)
+  and cut to its guard and `obj_handler_status_t` (`358f7c2`); it compiles on
+  its own with `-Werror -pedantic`, C99 and C11, host and ARM. The
+  verification recipes now target the new directory. C3–C5 closed as moot;
+  the new directory's line endings added to A5.
 
 - **2026-09-25** — Reviewed docs 00–18 for readiness. Heap allocator widened
   to `uint32_t` (`cf433a6`). `strings` renamed to `obj_string`, files and
