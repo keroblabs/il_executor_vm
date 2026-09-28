@@ -3,6 +3,8 @@
 
 #include "objects_types.h"
 #include "objects.h"
+#include "heap.h"
+#include "gc.h"
 
 #ifdef __cplusplus
 extern "C" {

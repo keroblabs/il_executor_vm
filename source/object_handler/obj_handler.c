@@ -10,18 +10,6 @@ int obj_handler_is_ready(void)
     return obj_handler_ready;
 }
 
-static void obj_handler_heap_space(const obj_handler_config_t * cfg, uint32_t seg)
-{
-    object_space_t * sp = &object_spaces[OBJECT_SPACE_HEAP + seg];
-
-    memset(cfg->segment[seg].handles, 0,
-           cfg->segment[seg].handle_count * sizeof(object_handle_t));
-    sp->base    = cfg->segment[seg].payload;
-    sp->handles = cfg->segment[seg].handles;
-    sp->limit   = cfg->segment[seg].handle_count;
-    sp->flags   = OBJECT_SP_COLLECTED | OBJECT_SP_WRITABLE;
-}
-
 obj_handler_status_t obj_handler_init(const obj_handler_config_t * cfg,
                                       const obj_handler_host_t   * host)
 {
@@ -53,13 +41,16 @@ obj_handler_status_t obj_handler_init(const obj_handler_config_t * cfg,
     obj_handler_host = *host;
     memset(object_spaces, 0, sizeof object_spaces);
     for (i = 0; i < cfg->segments; i++)
-        obj_handler_heap_space(cfg, i);
+        heap_segment_init(i, cfg->segment[i].payload, cfg->segment[i].payload_size,
+                          cfg->segment[i].handles, cfg->segment[i].handle_count,
+                          cfg->segment[i].gc_threshold_pct, cfg->segment[i].gc_handle_pct);
     obj_handler_ready = 1;
     return OBJ_HANDLER_OK;
 }
 
 void obj_handler_shutdown(void)
 {
+    heap_shutdown();
     memset(object_spaces, 0, sizeof object_spaces);
     memset(&obj_handler_host, 0, sizeof obj_handler_host);
     obj_handler_ready = 0;

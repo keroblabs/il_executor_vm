@@ -41,6 +41,11 @@ uint16_t    objects_type_of(object_id_t id);
 uint32_t    objects_size_of(object_id_t id);
 uint8_t     objects_kind_of(object_id_t id);
 
+/* May collect: every live id must be reachable from a root first (doc 14 section 7.3). */
+object_id_t objects_create(uint16_t type, uint32_t bytes);
+object_id_t objects_clone(object_id_t id);
+object_id_t objects_promote(object_id_t id);
+
 /* Identity in v1; tier 2 turns this pair into the escape barrier (doc 14 section 6.0). */
 static inline object_id_t objects_escape(object_id_t id)
 {
@@ -52,6 +57,8 @@ static inline void objects_write_ref(object_id_t * slot, object_id_t value)
     *slot = value;
 }
 
+void *      objects_pin(object_id_t id);
+void        objects_unpin(object_id_t id);
 void        objects_space_register(uint16_t tag, const object_space_t * desc);
 
 /* Library-internal. */

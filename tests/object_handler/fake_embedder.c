@@ -59,11 +59,17 @@ static void fake_on_corrupt(const char * where, object_id_t id)
 
 obj_handler_host_t fake_host = { fake_type_refmap, fake_on_oom, fake_on_corrupt };
 
-static void fake_dump(void)
+void fake_dump(void)
 {
+    heap_stats_t st;
     uint32_t i;
     uint32_t shown = 0;
 
+    heap_stats(&st);
+    fprintf(stderr, "---- heap: used %lu, free %lu in %lu blocks, largest %lu, live %lu ----\n",
+            (unsigned long)st.used_bytes, (unsigned long)st.free_bytes,
+            (unsigned long)st.free_blocks, (unsigned long)st.largest_free,
+            (unsigned long)st.live_objects);
     fprintf(stderr, "---- handles in use ----\n");
     for (i = 1; i < fake_cfg.segment[0].handle_count && i < FAKE_MAX_HANDLES; i++) {
         const object_handle_t * h = &fake_handle_mem[i];

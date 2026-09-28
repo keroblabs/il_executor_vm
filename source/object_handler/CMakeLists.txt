@@ -7,6 +7,8 @@ option(OBJECT_HANDLER_SANITIZE "Build ObjectHandler and its tests with ASan and 
 add_library(object_handler STATIC
     obj_handler.c
     objects.c
+    heap.c
+    gc.c
 )
 
 # The library's include path is its own directory only (doc 18 D3).

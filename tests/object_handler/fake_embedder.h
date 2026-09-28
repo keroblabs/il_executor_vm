@@ -29,6 +29,7 @@ extern object_id_t  fake_corrupt_id;
 void              fake_config(uint32_t payload_size, uint32_t handle_count);
 void              fake_init(uint32_t payload_size, uint32_t handle_count);
 void              fake_allow_corrupt(void);
+void              fake_dump(void);
 uint8_t         * fake_payload(void);
 object_handle_t * fake_handles(void);
 

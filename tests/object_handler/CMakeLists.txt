@@ -20,8 +20,9 @@ function(object_handler_test name)
 endfunction()
 
 object_handler_test(test_objects)
+object_handler_test(test_heap)
 
-foreach(target object_handler_harness test_objects)
+foreach(target object_handler_harness test_objects test_heap)
     set_target_properties(${target} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE -Wall -Wextra -Werror -pedantic)

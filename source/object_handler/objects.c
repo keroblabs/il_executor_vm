@@ -91,6 +91,69 @@ uint8_t objects_kind_of(object_id_t id)
     return h != NULL ? h->kind : (uint8_t)OBJECT_K_FREE;
 }
 
+object_id_t objects_create(uint16_t type, uint32_t bytes)
+{
+    return heap_alloc(OBJECT_SPACE_HEAP, type, OBJECT_K_OBJECT, bytes);
+}
+
+object_id_t objects_clone(object_id_t id)
+{
+    const object_handle_t * h = objects_handle_of(id, "objects_clone: not a live heap object");
+    object_id_t copy;
+    uint32_t size;
+
+    if (h == NULL)
+        return OBJECT_NULL;
+    size = h->size;
+    copy = heap_alloc(OBJECT_SPACE(id), h->type, h->kind, size);
+    if (copy != OBJECT_NULL && size != 0)
+        memcpy(objects_ptr(copy), objects_ptr(id), size);
+    return copy;
+}
+
+object_id_t objects_promote(object_id_t id)
+{
+    /* Nothing lives in OBJECT_SPACE_FRAME until tier 2 (doc 14 section 6.5). */
+    if (OBJECT_SPACE(id) == OBJECT_SPACE_FRAME) {
+        objects_corrupt("objects_promote: no frame scratch in v1", id);
+        return OBJECT_NULL;
+    }
+    return id;
+}
+
+/* Flat spaces never move, so only heap objects carry a pin count (A4). */
+void * objects_pin(object_id_t id)
+{
+    object_handle_t * h;
+
+    if (OBJECT_SPACE(id) < OBJECT_SPACE_CONST) {
+        h = objects_handle_of(id, "objects_pin: not a live heap object");
+        if (h == NULL)
+            return NULL;
+        if ((h->flags & OBJECT_H_PINNED) == OBJECT_H_PINNED)
+            objects_corrupt("objects_pin: more than 7 nested pins", id);
+        else
+            h->flags = (uint8_t)(h->flags + OBJECT_H_PIN_ONE);
+    }
+    return objects_ptr(id);
+}
+
+void objects_unpin(object_id_t id)
+{
+    object_handle_t * h;
+
+    if (OBJECT_SPACE(id) >= OBJECT_SPACE_CONST)
+        return;
+    h = objects_handle_of(id, "objects_unpin: not a live heap object");
+    if (h == NULL)
+        return;
+    if ((h->flags & OBJECT_H_PINNED) == 0) {
+        objects_corrupt("objects_unpin: not pinned", id);
+        return;
+    }
+    h->flags = (uint8_t)(h->flags - OBJECT_H_PIN_ONE);
+}
+
 void objects_space_register(uint16_t tag, const object_space_t * desc)
 {
     const char * error = NULL;
