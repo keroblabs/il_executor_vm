@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-28**, at commit `92ff6ea`.
+State recorded here: **2026-09-28**, at commit `e06439e`.
 
 ---
 
@@ -131,7 +131,7 @@ Decided. Changing one means changing the contract first.
    and standalone — the library configured on its own, which proves it
    reaches nothing in `source/`. Every case runs in its own process; a case
    that means something in one build only exits 77 and is reported as
-   skipped. Baseline: 81 cases pass, with zero warnings.
+   skipped. Baseline: 97 cases pass, with zero warnings.
 2. **Every library file on its own, through the ARM compiler** and host gcc,
    C99 and C11, debug and release switches. Baseline: zero diagnostics.
 3. **A behaviour change is proved by a case** that fails before the change
@@ -168,6 +168,9 @@ The commands are in §5.3.
 | `dcded70` | OH-1/OH-2 decisions folded into docs 14 and 18; checklist |
 | `a1faa16` | D9 decided; OH-5 moved before OH-3 and OH-4 |
 | `92ff6ea` | OH-5: arrays, UTF-8 strings, boxing; interning and `value_compare` wait |
+| `c6600df` | OH-5 decisions folded into docs 14 and 18; checklist |
+| `6d72cea` | D7 decided: the statics slab and the constant table; B3 settled, A6 superseded |
+| `e06439e` | D7 built: both spaces configured at init, constants readable everywhere, `obj_string_intern` |
 
 ### 3.2 Code, file by file
 
@@ -176,23 +179,24 @@ The commands are in §5.3.
 | File | Holds | Slice |
 |---|---|---|
 | `obj_handler_config.h` | the one configuration: space count, segments, `HEAP_MAX_PAYLOAD`, string encoding; the four debug switches, on unless `NDEBUG` | OH-1 |
-| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`; `OBJECT_LIKELY`; layout asserts | OH-1 |
-| `objects.c/.h` | the space table, `objects_ptr` (checked in debug), registration, accessors, `objects_create`/`clone`/`promote`/`pin`/`unpin`, the identity barrier | OH-1, OH-2 |
-| `obj_handler.c/.h` | the umbrella: status codes, host and config structs, `obj_handler_init` with its eight checks, `obj_handler_shutdown` | OH-1 |
+| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`, the constant entry `object_const_t`; `OBJECT_LIKELY`; layout asserts | OH-1, D7 |
+| `objects.c/.h` | the space table, `objects_ptr` (checked in debug) and the constant resolver, `objects_info`, registration of `NATIVE`, accessors, `objects_create`/`clone`/`promote`/`pin`/`unpin`, the identity barrier | OH-1, OH-2, D7 |
+| `obj_handler.c/.h` | the umbrella: status codes, host and config structs, `obj_handler_init` with its ten checks, `obj_handler_shutdown` | OH-1, D7 |
 | `heap.c/.h` | first fit with coalescing, bump top, handle free list with quarantine, generations, guard headers and poisoning in debug, `heap_verify`, `heap_stats` | OH-2 |
 | `gc.c/.h` | stub: `gc_request` and `gc_collect` do nothing until OH-3 | OH-2 |
 | `array.c/.h` | `array_create`, length, the one range check, element pointer and byref, overlap-safe copy through the barrier, clear | OH-5 |
-| `obj_string.c/.h` | strict UTF-8 validation, create, concat, `Length` and `char_at` in UTF-16 units, `OBJECT_H_ASCII` | OH-5 |
+| `obj_string.c/.h` | strict UTF-8 validation, create, concat, `Length` and `char_at` in UTF-16 units, `OBJECT_H_ASCII`; `obj_string_intern` returns a constant's id | OH-5, D7 |
 | `value.c/.h` | `value_box`, `value_unbox`; `value_compare` comes with OH-4 | OH-5 |
 | `CMakeLists.txt` | target `object_handler`; configured on its own, it is the standalone build and adds the tests | OH-1 |
 
 `tests/object_handler/`: `harness.c/.h` (L1), `fake_embedder.c/.h` (L2),
 `test_objects.c` (25 cases), `test_heap.c` (29, among them two seeded 64 KB
 tortures and deliberate-damage cases that `heap_verify` must catch),
-`test_array_string.c` (21, among them a 22-row UTF-8 table) and
-`test_value.c` (6).
+`test_array_string.c` (21, among them a 22-row UTF-8 table),
+`test_value.c` (6) and `test_spaces.c` (16: statics, constants, and one
+case per malformed slab or table entry).
 
-Release build for Cortex-M4 at `-Os`: 6,286 bytes of `.text`, 438 of `.bss`.
+Release build for Cortex-M4 at `-Os`: 6,998 bytes of `.text`, 446 of `.bss`.
 Nothing carried over from the Ruffus copy except `obj_handler.h`'s status
 enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 
@@ -224,7 +228,7 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 | OH-T | L1, L2 and L7 done; L3, L5 and L6 in part (§4 D) |
 | OH-1 | **done** — `7ff3a8f` |
 | OH-2 | **done** — `1fe5476` |
-| OH-5 | **built** — `92ff6ea`; interning (OH-3), `value_compare` (OH-4) and the tracing test (OH-3) wait |
+| OH-5 | **built** — `92ff6ea`, interning `e06439e`; `value_compare` (OH-4) and the tracing test (OH-3) wait |
 | OH-3, OH-4, OH-6 | not started |
 
 ---
@@ -307,7 +311,8 @@ These either land in the first commit's headers or block OH-1.
   closed; reword it to point here. *Done:* A is closed, and §12 now says
   "nothing remains open before OH-3".
 - [ ] **B5 — Docs 00, 13, 15 and 17**: check them for the same stale points
-  as B1 (strings open, tier 2 shipping).
+  as B1 (strings open, tier 2 shipping). Doc 00 still says `ldstr` takes a
+  literal-pool index; since D7 it is a constant index (14 §3.5).
 - [ ] **B6 — 14 §6.6 and 18 OH-5** tell `value.c` to reimplement Ruffus's
   "mixed-type promotion table" for `value_compare`. Ruffus has none: its
   `value_compare` rejects operands of different types. The rules have to come
@@ -364,9 +369,10 @@ These either land in the first commit's headers or block OH-1.
   decided (14 §3.5).
 - [ ] **OH-4** — stack: threads, slots, frames (18 §6).
 - [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
-  (18 §7), built before OH-3 and OH-4 (`92ff6ea`). D9 decided (14 §5.6).
-  Still open, each waiting for its slice: `obj_string_intern` (OH-3, D7),
-  `value_compare` (OH-4, B6) and the tracing test (OH-3). `String.Split` stays
+  (18 §7), built before OH-3 and OH-4 (`92ff6ea`). D9 decided (14 §5.6);
+  `obj_string_intern` came with D7 (`e06439e`). Still open, each waiting for
+  its slice: `value_compare` (OH-4, B6) and the tracing test (OH-3).
+  `String.Split` stays
   out of `obj_string.c`: it needs the embedder's `string[]` type id (C6).
 - [ ] **OH-6** — hardening: sanitizers, coverage, 32-bit `-Os` build,
   statistics dump (18 §8).
@@ -449,6 +455,17 @@ rm -rf "$d"
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-28, fourth part** — The owner deferred the collector (OH-3) and
+  asked for D7 on its own. D7 decided (`6d72cea`): the statics slab is a flat
+  space the embedder fills; constants are an indirect space over a 12-byte-
+  entry table in the image, immutable and id-free; a literal is a constant,
+  so `ldstr` allocates nothing. That settled B3 and superseded A6. Built
+  (`e06439e`): `E_STATICS` and `E_CONST`, constants readable by every
+  module through `objects_info`, `obj_string_intern`. 97 cases pass in the
+  three builds; three mutants were caught, one only after a test was
+  strengthened; 7.0 KB for Cortex-M4. Still ahead: OH-3 (D5, D6), OH-4,
+  `value_compare`, and B5, which now includes doc 00's "literal-pool index".
 
 - **2026-09-28, third part** — OH-5 moved before OH-3 and OH-4 at the
   owner's request, and D9 decided: a NUL-terminated UTF-8 payload,

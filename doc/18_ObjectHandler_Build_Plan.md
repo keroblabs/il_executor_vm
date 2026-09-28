@@ -350,6 +350,7 @@ tests/object_handler/
     test_stack.c               OH-4
     test_array_string.c        OH-5
     test_value.c               OH-5 — boxing
+    test_spaces.c              D7 — the statics slab and the constant table
     torture.c                  OH-2 and OH-3, driven by oracle + replay
     regressions/               failing seeds, one file each, never deleted
 ```
@@ -728,6 +729,7 @@ and OH-4, not deferred.
 | Coding OH-1 and OH-2 (2026-09-28) | Debug switches default from `NDEBUG`, each overridable with `-D`. `heap_verify` returns 1 or 0 and reports the first fault: release checks order, ranges, accounting and coverage by sums, and `HEAP_DEBUG` adds an exact address walk through the guard headers. A free block that reaches the untouched top rejoins it. The standalone build is `source/object_handler/` configured on its own, which also adds the tests. The per-file recipe compiles each header through a one-line wrapper, since a macro-only header is an empty unit under `-pedantic` |
 | OH-5 first, D9 (2026-09-28) | OH-5 is built before OH-3 and OH-4; interning, `value_compare` and the tracing test wait for their slices (§7). D9: a NUL-terminated UTF-8 payload, `OBJECT_H_ASCII`, `Length` and `obj_string_char_at` in UTF-16 units, `OBJECT_NULL` for invalid UTF-8, `string_type` in the config — 14 §5.6 |
 | Statics and constants (D7, 2026-09-28) | Decided ahead of OH-3, at the owner's request, and built at once: both spaces configured by `obj_handler_init` with `E_STATICS` and `E_CONST`, constants accepted by every reader, `obj_string_intern` returning constant ids. Supersedes A6 — 14 §3.5 |
+| Coding D7 (2026-09-28) | Built in `e06439e`, with `test_spaces.c`: 16 cases, among them one per malformed statics slab and one per malformed constant entry, and a fake embedder that lays out constant tables the way `cli_pack` will. Three mutants — no refmap check, no upper bound on constant indices, writes into constants allowed — were each caught |
 | Coding OH-5 (2026-09-28) | The element-refmap check in `array_create` sits under `OBJECT_DEBUG_REFS`. Reference arrays copy through the barrier element by element; everything else by `memmove`. Boxing tests live in `test_value.c`, which the §2.4 tree gains |
 
 **Nothing remains open before OH-3:** A1–A13 are settled
