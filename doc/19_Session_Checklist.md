@@ -367,7 +367,9 @@ These either land in the first commit's headers or block OH-1.
 - [ ] **OH-3** — collector (18 §5), deferred by the owner. Decide first: D5
   rooting-scope API and D6 `gc_poll` and the safepoint contract; D7 is
   decided (14 §3.5).
-- [ ] **OH-4** — stack: threads, slots, frames (18 §6).
+- [ ] **OH-4** — stack: threads, slots, frames (18 §6). Deferred by the owner
+  (2026-09-28). These are the managed evaluation stacks and frames, not OS
+  thread stacks: no IL runs without them, and they are the collector's roots.
 - [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
   (18 §7), built before OH-3 and OH-4 (`92ff6ea`). D9 decided (14 §5.6);
   `obj_string_intern` came with D7 (`e06439e`). Still open, each waiting for
@@ -380,6 +382,11 @@ These either land in the first commit's headers or block OH-1.
 ### E. Later, not blocking
 
 - Finalizers and weak references (14 §11, item 1).
+- **Several applications per device** *(open, owner to decide)* — Ruffus's
+  model: one `app_instance` per application, the global pointer switched per
+  time slice, no locks anywhere. ObjectHandler v1 is one instance per
+  program (A2, 17 §5). Supporting it means moving every global into an
+  instance struct; cheaper before `cli_exec` is written against the API.
 - The tuning constants, which need host measurements (14 §11, item 2).
 - Struct copies and the write barrier, decided with tier 2 (14 §11, item 3).
 - Generational collection (11 §7.7).
