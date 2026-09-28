@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-28**, at commit `e06439e`.
+State recorded here: **2026-09-28**, at commit `d99a6ec`.
 
 ---
 
@@ -28,7 +28,7 @@ project's architecture and rewrites its details
 | `cli_pack` | host tool: reads .NET assemblies, resolves and folds everything it can, writes one `.vxb` image | parser front end done — `source/`, [Phase 0](99_phase0_work.md); the rest not started |
 | `cli_exec` | runs a `.vxb` image, on the device or the host | not started |
 | `cli_dump` | prints an image, for inspection and tests | not started |
-| **ObjectHandler** | standalone C library for objects, the heap, per-thread stacks and the collector; knows nothing about CIL | contract [14](14_ObjectHandler.md), plan [18](18_ObjectHandler_Build_Plan.md); **OH-1 and OH-2 built and tested** — ids, spaces, init, allocator; next OH-3, the collector |
+| **ObjectHandler** | standalone C library for objects, the heap, per-thread stacks and the collector; knows nothing about CIL | contract [14](14_ObjectHandler.md), plan [18](18_ObjectHandler_Build_Plan.md); **OH-1, OH-2, OH-5 and D7 built and tested**, one instance per application; OH-3 and OH-4 deferred by the owner |
 
 **Current focus: ObjectHandler v1**, built in the order of doc 18 and tested
 until it is the component nobody has to suspect. After it come the image
@@ -73,7 +73,8 @@ Decided. Changing one means changing the contract first.
 | Heap profile (v1) | one collectable segment; `HEAP_MAX_PAYLOAD` 65536; `handle_count = payload_size / 32` | 14 §5.5, §9.1, §9.2 |
 | API widths | every byte and element count is `uint32_t`; type ids and `elem_size` stay 16-bit | 14 §5.2, §8 |
 | Configuration | one configuration for MCU and host; only debug versus release differs | 18 §0.2, 11 §4.6 |
-| Threads | one OS thread; green threads preempted at safepoints; 20 ms slice | 17 |
+| Threads | one OS thread per application; green threads preempted at safepoints; 20 ms slice; applications share nothing | 17, 14 §1 |
+| Instances | one `obj_handler_t` per application, taken first by every call and passed to every callback; no mutable globals | 14 §1, §8 |
 | `native int` | 32 bits on every target | 15 §11 |
 | Strings | UTF-8 payloads; `cli_pack` rejects non-ASCII literals unless `--allow-non-ascii` | 14 §5.6 |
 | Arrays | one-dimensional, inline elements, fixed length; the type's refmap describes one element | 14 §5.7 |
@@ -96,6 +97,9 @@ Decided. Changing one means changing the contract first.
   `malloc` nor `printf`, and its headers compile against `<stdint.h>` and
   `<string.h>` only ([14 §1](14_ObjectHandler.md)).
 - `on_oom` never returns ([18 D1](18_ObjectHandler_Build_Plan.md)).
+- ObjectHandler keeps no mutable globals: its state is the `obj_handler_t`
+  every call takes, and no object id leaves its instance
+  ([14 §1](14_ObjectHandler.md)).
 - Nothing is copied from `ruffusvm/RuffusVM/RuffusVMTool/`, which is
   GPL/NanoVM code ([13](13_Ruffus_VM_Reuse.md)).
 
@@ -131,7 +135,7 @@ Decided. Changing one means changing the contract first.
    and standalone — the library configured on its own, which proves it
    reaches nothing in `source/`. Every case runs in its own process; a case
    that means something in one build only exits 77 and is reported as
-   skipped. Baseline: 97 cases pass, with zero warnings.
+   skipped. Baseline: 101 cases pass, with zero warnings.
 2. **Every library file on its own, through the ARM compiler** and host gcc,
    C99 and C11, debug and release switches. Baseline: zero diagnostics.
 3. **A behaviour change is proved by a case** that fails before the change
@@ -171,6 +175,10 @@ The commands are in §5.3.
 | `c6600df` | OH-5 decisions folded into docs 14 and 18; checklist |
 | `6d72cea` | D7 decided: the statics slab and the constant table; B3 settled, A6 superseded |
 | `e06439e` | D7 built: both spaces configured at init, constants readable everywhere, `obj_string_intern` |
+| `1c56a11` | D7 coding decisions folded into docs 14 and 18; checklist |
+| `ba2afed` | checklist: OH-4 deferred; the several-applications question recorded |
+| `bed86cf` | instances decided (I1–I6): one `obj_handler_t` per application; docs 11, 14, 17, 18 |
+| `d99a6ec` | instances built: every global moved into `obj_handler_t`; `test_instances.c` |
 
 ### 3.2 Code, file by file
 
@@ -179,9 +187,9 @@ The commands are in §5.3.
 | File | Holds | Slice |
 |---|---|---|
 | `obj_handler_config.h` | the one configuration: space count, segments, `HEAP_MAX_PAYLOAD`, string encoding; the four debug switches, on unless `NDEBUG` | OH-1 |
-| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`, the constant entry `object_const_t`; `OBJECT_LIKELY`; layout asserts | OH-1, D7 |
+| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`, the constant entry `object_const_t`; the instance `obj_handler_t`, with the host callbacks and heap segments it holds; `OBJECT_LIKELY`; layout asserts | OH-1, D7, I1 |
 | `objects.c/.h` | the space table, `objects_ptr` (checked in debug) and the constant resolver, `objects_info`, registration of `NATIVE`, accessors, `objects_create`/`clone`/`promote`/`pin`/`unpin`, the identity barrier | OH-1, OH-2, D7 |
-| `obj_handler.c/.h` | the umbrella: status codes, host and config structs, `obj_handler_init` with its ten checks, `obj_handler_shutdown` | OH-1, D7 |
+| `obj_handler.c/.h` | the umbrella: status codes, the config struct, `obj_handler_init` on the caller's instance with its ten checks, `obj_handler_shutdown`, which zeroes it | OH-1, D7, I1 |
 | `heap.c/.h` | first fit with coalescing, bump top, handle free list with quarantine, generations, guard headers and poisoning in debug, `heap_verify`, `heap_stats` | OH-2 |
 | `gc.c/.h` | stub: `gc_request` and `gc_collect` do nothing until OH-3 | OH-2 |
 | `array.c/.h` | `array_create`, length, the one range check, element pointer and byref, overlap-safe copy through the barrier, clear | OH-5 |
@@ -193,10 +201,13 @@ The commands are in §5.3.
 `test_objects.c` (25 cases), `test_heap.c` (29, among them two seeded 64 KB
 tortures and deliberate-damage cases that `heap_verify` must catch),
 `test_array_string.c` (21, among them a 22-row UTF-8 table),
-`test_value.c` (6) and `test_spaces.c` (16: statics, constants, and one
-case per malformed slab or table entry).
+`test_value.c` (6), `test_spaces.c` (16: statics, constants, and one
+case per malformed slab or table entry) and `test_instances.c` (4: two
+instances side by side, among them a seeded interleaving in which one runs
+out of memory beside the other).
 
-Release build for Cortex-M4 at `-Os`: 6,998 bytes of `.text`, 446 of `.bss`.
+Release build for Cortex-M4 at `-Os`: 7,128 bytes of `.text` and no `.data`
+or `.bss`; one instance is 444 bytes, and the embedder allocates it.
 Nothing carried over from the Ruffus copy except `obj_handler.h`'s status
 enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 
@@ -229,6 +240,7 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 | OH-1 | **done** — `7ff3a8f` |
 | OH-2 | **done** — `1fe5476` |
 | OH-5 | **built** — `92ff6ea`, interning `e06439e`; `value_compare` (OH-4) and the tracing test (OH-3) wait |
+| Instances (I1–I6) | **done** — decided `bed86cf`, built `d99a6ec` |
 | OH-3, OH-4, OH-6 | not started |
 
 ---
@@ -288,6 +300,14 @@ These either land in the first commit's headers or block OH-1.
   from running a negative test to completion. *Decided:* a safe value is
   returned in every build; aborting is the embedder's choice inside
   `on_corrupt`. *Recorded in:* 18 D1, 14 §9.2.
+- [x] **A14 — Instances (I1–I6).** The owner's model: one application is one
+  thread, and several applications are several threads that share nothing.
+  *Decided:* one `obj_handler_t` per application holds all library state (I1);
+  every call takes it first and every callback receives it (I2); A2 holds per
+  instance, and doc 17 gives each application one OS thread (I3); no object
+  id leaves its instance (I4); locks for shared peripherals live in the native
+  and board layer (I5); built at once, before OH-3 and OH-4 (I6).
+  *Recorded in:* 14 §§1, 7.5, 8, 9 and §11; 17 §§1, 5; 11 §7.3; 18 §12.
 
 ### B. Documentation cleanup
 
@@ -382,11 +402,6 @@ These either land in the first commit's headers or block OH-1.
 ### E. Later, not blocking
 
 - Finalizers and weak references (14 §11, item 1).
-- **Several applications per device** *(open, owner to decide)* — Ruffus's
-  model: one `app_instance` per application, the global pointer switched per
-  time slice, no locks anywhere. ObjectHandler v1 is one instance per
-  program (A2, 17 §5). Supporting it means moving every global into an
-  instance struct; cheaper before `cli_exec` is written against the API.
 - The tuning constants, which need host measurements (14 §11, item 2).
 - Struct copies and the write barrier, decided with tier 2 (14 §11, item 3).
 - Generational collection (11 §7.7).
@@ -462,6 +477,21 @@ rm -rf "$d"
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-28, fifth part** — The owner deferred OH-4 and set the threading
+  model: one application is one thread, and several applications are several
+  threads that share nothing. Ruffus isolates applications through one
+  `app_instance` pointer switched per slice; the new library had nine
+  file-scope globals instead, so two applications would have shared a heap.
+  **Instances decided and built** (A14; `bed86cf`, `d99a6ec`): every global
+  moved into `obj_handler_t`, which every call takes first and every host
+  callback receives; `objects_shutdown` and `obj_string_init` are gone.
+  Measured on Cortex-M4, resolving an id takes 9 instructions with the
+  instance passed, 10 with globals and 11 with a switched pointer.
+  `test_instances.c` adds 4 cases, and 101 pass in the three builds; every
+  file compiles clean for host and ARM, C99 and C11. A heap pointer kept
+  inside `heap.c` fails three of the new cases. 7.1 KB of code for
+  Cortex-M4, no `.bss`, and 444 bytes per instance.
 
 - **2026-09-28, fourth part** — The owner deferred the collector (OH-3) and
   asked for D7 on its own. D7 decided (`6d72cea`): the statics slab is a flat
