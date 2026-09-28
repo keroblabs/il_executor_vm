@@ -506,7 +506,7 @@ reached through a scan function that `stack.c` registers (A7); until OH-4
 exists, the tests register a fake one.
 
 **Consumes** (decide at the start of this slice, §9): D5 rooting-scope API,
-D6 `gc_poll` and the safepoint contract, D7 statics slab and literal pool.
+D6 `gc_poll` and the safepoint contract; D7 is decided (14 §3.5).
 
 **Work:**
 
@@ -675,7 +675,7 @@ without the code in front of you.
 |---|---|---|---|
 | D5 | Rooting-scope API shape | OH-3 | fixed-depth array vs linked scopes |
 | D6 | `gc_poll` and the safepoint contract | OH-3 | must agree with [17 §4.4](17_Threading_Model.md) |
-| D7 | Statics slab and literal pool layout | OH-3 | includes the `OBJECT_SPACE_CONST` contradiction in 14 §3.1 vs §3.3 — the catalogue says "literal-pool index", resolution says byte offset. One of the two is wrong |
+| ~~D7~~ | ~~Statics slab and literal pool layout~~ | OH-3 | **decided 2026-09-28** — 14 §3.5; B3 settled: a `CONST` index selects a constant-table entry |
 | ~~D9~~ | ~~String layout and interning~~ | OH-5 | **decided 2026-09-28** — 14 §5.6; interning goes with D7 |
 
 D8, the array payload header, was on this list and is now resolved in 14 §5.7:
@@ -727,6 +727,7 @@ and OH-4, not deferred.
 | Pre-OH-1 decisions (2026-09-28) | [19](19_Session_Checklist.md) A2–A13 and D4, accepted as recommended. Recorded in 14 §§1, 1.1, 3.2, 3.4, 5.2, 7.4, 7.5, 9 and 9.2, and here in D1, D2, §3, §4 and §5 |
 | Coding OH-1 and OH-2 (2026-09-28) | Debug switches default from `NDEBUG`, each overridable with `-D`. `heap_verify` returns 1 or 0 and reports the first fault: release checks order, ranges, accounting and coverage by sums, and `HEAP_DEBUG` adds an exact address walk through the guard headers. A free block that reaches the untouched top rejoins it. The standalone build is `source/object_handler/` configured on its own, which also adds the tests. The per-file recipe compiles each header through a one-line wrapper, since a macro-only header is an empty unit under `-pedantic` |
 | OH-5 first, D9 (2026-09-28) | OH-5 is built before OH-3 and OH-4; interning, `value_compare` and the tracing test wait for their slices (§7). D9: a NUL-terminated UTF-8 payload, `OBJECT_H_ASCII`, `Length` and `obj_string_char_at` in UTF-16 units, `OBJECT_NULL` for invalid UTF-8, `string_type` in the config — 14 §5.6 |
+| Statics and constants (D7, 2026-09-28) | Decided ahead of OH-3, at the owner's request, and built at once: both spaces configured by `obj_handler_init` with `E_STATICS` and `E_CONST`, constants accepted by every reader, `obj_string_intern` returning constant ids. Supersedes A6 — 14 §3.5 |
 | Coding OH-5 (2026-09-28) | The element-refmap check in `array_create` sits under `OBJECT_DEBUG_REFS`. Reference arrays copy through the barrier element by element; everything else by `memmove`. Boxing tests live in `test_value.c`, which the §2.4 tree gains |
 
 **Nothing remains open before OH-3:** A1–A13 are settled

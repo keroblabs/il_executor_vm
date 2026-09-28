@@ -183,7 +183,10 @@ static class Lookup {
 RuntimeHelpers::InitializeArray`. That *is* foldable, but not by the constant
 interpreter: it is handled by the existing `FieldRVA` path — the bytes are
 already in the image (region 1, [11 §2.1](11_Memory_Model.md)), and the
-packer emits an immortal array wrapper over them, with no `.cctor` at all.
+packer emits the array as a constant over them, with no `.cctor` at all —
+provided it proves nothing writes the array. Otherwise `InitializeArray`
+copies the bytes into a heap array at start-up
+([14 §3.5](14_ObjectHandler.md)).
 
 `Boot` is not foldable by anything: `DateTime.Now` is a call with an
 observable result that differs per run. One unfoldable store **disqualifies
@@ -197,7 +200,7 @@ of:
 | Allowed | Note |
 |---|---|
 | `ldc.i4*`, `ldc.i8`, `ldc.r4`, `ldc.r8`, `ldnull` | the constants |
-| `ldstr` | resolves to a literal-pool index, already immortal |
+| `ldstr` | resolves to a constant index, already immortal. Stored into a static, it is written at start-up from a fix-up list, because an id cannot live in the image ([14 §3.5](14_ObjectHandler.md)) |
 | `conv.*` (non-`ovf`), `neg`, `not`, `add`, `sub`, `mul`, `shl`, `shr`, `and`, `or`, `xor` | evaluated with CIL semantics, not C's |
 | `stsfld` to a field **of the declaring type** | a store elsewhere is a side effect |
 | `dup`, `pop`, `nop` | |

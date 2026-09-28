@@ -113,10 +113,9 @@ can be rewritten to an absolute slab offset at pack time.
 ### 3.2 Literal strings
 
 Every reachable `ldstr` operand is resolved against `#US`, deduplicated, and
-appended to the literal pool. Pool entries are immutable image data
-(region 1); the **`System.String` objects** that wrap them are immortal
-(region 2) and their handles live in a fixed-size table sized by the number of
-distinct literals.
+appended to the image's constant table ([14 §3.5](14_ObjectHandler.md)). A
+literal is read in place as a constant: `ldstr` yields its id, with no
+wrapper object and no table in RAM.
 
 Literals are never collected. This matches .NET's interning behaviour for
 `ldstr` and removes a whole class of lifetime questions from the hot path.
@@ -245,7 +244,7 @@ come from **both** sources, with the header carrying the minimum:
 | Region | Computed by `cli_pack` from | Override |
 |---|---|---|
 | Statics slab | the static-field layout pass — exact | none; it is exact |
-| Literal table | count of distinct `ldstr` operands — exact | none |
+| Constant table | nothing in RAM: read in place ([14 §3.5](14_ObjectHandler.md)) | none |
 | Value + frame stack per thread | deepest reachable call chain × (`MaxStack` + locals + args), × a **recursion budget** for cyclic call graphs | board manifest |
 | Scratch arena per thread | Σ scratch-classified box sizes on the longest path ([14 §6.4](14_ObjectHandler.md)) | board manifest |
 | Heap payload | *not computable* — allocation is data-dependent | board manifest / launch flag; header carries a minimum |
@@ -621,7 +620,7 @@ existing signature decoder and layout pass.
 | Per-method `scratch_bytes` + per-thread arena size | image | startup sizing | scratch-classified box sites — [14 §6.4](14_ObjectHandler.md) |
 | Handle-table capacity | image | startup sizing | `payload_size / 32` — [14 §9.1](14_ObjectHandler.md) |
 | Heap payload minimum + GC thresholds | image | startup sizing | board manifest overrides — §4.5, [14 §7.3](14_ObjectHandler.md) |
-| Literal pool + count | image | interning table sizing | §3.2 |
+| Constant table: entries, count, size | image | the `CONST` space | §3.2, [14 §3.5](14_ObjectHandler.md) |
 | Per-type instance size and alignment; element size for array types | per type | `heap_alloc`, `array_create` | layout pass |
 | Escape classification per `box` site | per instruction | scratch vs heap allocation | [15 §4](15_Pack_Time_IL_Transforms.md) |
 

@@ -262,7 +262,8 @@ These either land in the first commit's headers or block OH-1.
 - [x] **A6 — Reserve the literal-table fields.** The interned-literal table
   is a root (14 §7.4) with no field in `obj_handler_config_t` (14 §9).
   *Decided:* `object_id_t * literals` and `uint32_t literal_count`.
-  *Recorded in:* 14 §9.
+  *Recorded in:* 14 §9. *Superseded by D7* (14 §3.5): literals are
+  constants, so the fields and the root are gone.
 - [x] **A7 — Collector ↔ stack seam.** *Decided:* `stack.c` registers one
   root-scan function with `gc.c`, which never includes `stack.h`, so OH-3 is
   testable before OH-4. *Recorded in:* 14 §7.4, 18 §5.
@@ -299,8 +300,9 @@ These either land in the first commit's headers or block OH-1.
     (14 §5.6).
 - [ ] **B2 — 14 §1** claims `heap.c` compiles without `WANT_OBJECT_HANDLER`.
   It does not (`heap_t` is defined twice; `flags` and `b_size` are missing).
-- [ ] **B3 — 14 §3.1 against §3.3** on what an `OBJECT_SPACE_CONST` index
-  means — a literal-pool index or a byte offset. Settled by D7.
+- [x] **B3 — 14 §3.1 against §3.3** on what an `OBJECT_SPACE_CONST` index
+  means — a literal-pool index or a byte offset. *Settled by D7:* it selects a
+  constant-table entry (14 §3.5).
 - [x] **B4 — 18 §12's "Nothing remains open"** stays untrue until A is
   closed; reword it to point here. *Done:* A is closed, and §12 now says
   "nothing remains open before OH-3".
@@ -357,9 +359,9 @@ These either land in the first commit's headers or block OH-1.
   `obj_handler_init` with the checks of 14 §9.2 (18 §3) — `7ff3a8f`.
 - [x] **OH-2** — allocator: new `heap.c`, free list, `heap_release`,
   `heap_verify`, statistics (18 §4) — `1fe5476`.
-- [ ] **OH-3** — collector (18 §5). Decide first: D5 rooting-scope API, D6
-  `gc_poll` and the safepoint contract, D7 statics slab and literal pool
-  (includes B3).
+- [ ] **OH-3** — collector (18 §5), deferred by the owner. Decide first: D5
+  rooting-scope API and D6 `gc_poll` and the safepoint contract; D7 is
+  decided (14 §3.5).
 - [ ] **OH-4** — stack: threads, slots, frames (18 §6).
 - [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
   (18 §7), built before OH-3 and OH-4 (`92ff6ea`). D9 decided (14 §5.6).
@@ -377,7 +379,9 @@ These either land in the first commit's headers or block OH-1.
 - Generational collection (11 §7.7).
 - The four open items in doc 16 and `Thread.Interrupt` semantics (17 §11).
 - `12_VXB_Format.md`, the next contract after ObjectHandler v1
-  (00 §7.1), and `09_Native_BCL_Bridge.md` before the first intrinsic. Number
+  (00 §7.1): it must carry the constant table of 14 §3.5 and the statics
+  fix-up list of 15 §5.1. `09_Native_BCL_Bridge.md` comes before the first
+  intrinsic. Number
   formatting and parsing are natives there, written new: Ruffus's `strings.c`
   prints `0` as an empty string and `3.25` as `3`, and parses `"-5"` as 0.
 

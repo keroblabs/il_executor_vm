@@ -261,8 +261,8 @@ of the system is written against, and it is what the two upgrades need:
   §2.1.1 forbids it from storing anything but an `object_id_t` and §3.3 is
   the only way to turn one into bytes.
 
-The exception, stated plainly: the **flat** spaces — `OBJECT_SPACE_STATIC`,
-`OBJECT_SPACE_FRAME`, and flat `OBJECT_SPACE_CONST` entries — use the index
+The exception, stated plainly: the **flat** spaces — `OBJECT_SPACE_STATIC`
+and `OBJECT_SPACE_FRAME` — use the index
 *as* a byte offset (§3.3). Those ids are not pure identities, which is
 precisely why those regions are immortal, immovable and capped at 64 KB each.
 Making one of them movable means giving it a handle table: the same local
@@ -280,7 +280,7 @@ then widen** — not design for a heap size no image has yet asked for.
 | Tag | Name | Class ([11 §1](11_Memory_Model.md)) | Index means | Collected | Writable |
 |---|---|---|---|---|---|
 | `0x0000`–`0x000F` | `OBJECT_SPACE_HEAP + n` | collectable | handle slot in segment *n* | **yes** | yes |
-| `0x0010` | `OBJECT_SPACE_CONST` | immutable image | literal-pool index | no | **no** |
+| `0x0010` | `OBJECT_SPACE_CONST` | immutable image | constant-table index (§3.5) | no | **no** |
 | `0x0011` | `OBJECT_SPACE_STATIC` | immortal | byte offset in the statics slab | no — **root** | yes |
 | `0x0012` | `OBJECT_SPACE_FRAME` | scoped | byte offset in a thread stack region | no — **root**, LIFO | yes |
 | `0x0013` | `OBJECT_SPACE_NATIVE` | foreign | native descriptor index | no | per descriptor |
@@ -381,7 +381,8 @@ static inline void * objects_ptr(object_id_t id)
 ```
 
 One predictable branch and two loads on the heap path; one branch and one
-add on constants, statics and frame scratch. The
+add on statics and frame scratch. Constants go through their table, outside
+the inline path (§3.5). The
 [once-per-opcode rule](11_Memory_Model.md#44-resolution-and-the-once-per-opcode-rule)
 is unchanged and is what keeps this off the critical path.
 
@@ -415,6 +416,61 @@ are not inline — `objects_type_of`, `_size_of`, `_kind_of`, `_clone`, `_pin`,
 `OBJECT_H_INUSE` and, in debug, the generation, and send a bad id to
 `on_corrupt`. `objects_ptr` is the one path that resolves blind in release,
 because it is the hot one.
+
+### 3.5 Statics and constants (D7)
+
+Decided 2026-09-28. `obj_handler_init` configures both spaces from the
+config (§9); `objects_space_register` accepts neither.
+
+**The statics slab — `OBJECT_SPACE_STATIC`, flat.** `OBJECT_ID(STATIC, off)`
+resolves to `statics + off`: a static field's id is its byte offset, which is
+what lets `cli_pack` rewrite `ldsfld` to one. Bytes 0–7 are reserved, so
+`cli_pack` lays fields out from offset 8 and index 0 stays invalid. The slab
+is 8-aligned, a multiple of 8 and at most 64 KB. `statics_refmap` has one bit
+per word — bit *i* set when the word at offset 4·*i* is an `object_id_t` — and
+is NULL when no static holds an id; words 0 and 1 are never marked. The
+embedder fills the slab and ObjectHandler never writes it. A reference word
+holds `OBJECT_NULL` or a live id and never image data, because an id's bits
+differ between debug and release builds (§2.1). A static that a folded
+`.cctor` sets to a literal is therefore written at start-up by `cli_exec`,
+from a fix-up list in the image ([15 §5.1](15_Pack_Time_IL_Transforms.md)).
+
+**The constant table — `OBJECT_SPACE_CONST`, indirect.** An index selects an
+entry of a table in the image, so a constant's id is a pure identity, like a
+heap id. Resolution reads the entry, off the inline path of §3.3. The table
+is one image format, identical in debug and release builds, little-endian:
+
+```c
+typedef struct {            /* entry i of the table at const_base; entry 0 reserved */
+    uint32_t offset;        /* payload offset from const_base; 8-aligned, past the table */
+    uint32_t size;          /* payload bytes */
+    uint16_t type;          /* embedder type id */
+    uint8_t  kind;          /* OBJECT_K_*, never FREE */
+    uint8_t  flags;         /* OBJECT_H_ASCII for an ASCII string, else 0 */
+} object_const_t;           /* 12 bytes */
+```
+
+Payloads are laid out exactly as on the heap: a string is its UTF-8 bytes and
+a NUL (§5.6), an array starts with its `array_header_t` (§5.7). A constant is
+immutable, never collected, and **never holds an id**, which is why
+constants are not a root. `obj_handler_init` checks every entry — kind,
+flags, bounds, a string's NUL, an array's header, and that an object, array
+or box constant has a NULL refmap — and returns `OBJ_HANDLER_E_CONST` for the
+first bad one (§9.2).
+
+**Literals are constants, read in place.** `obj_string_intern(i)` returns
+`OBJECT_ID(CONST, i)` once it has checked that entry *i* is a string: no copy
+and no allocation, so `ldstr` can neither run out of memory nor trigger a
+collection. This supersedes A6: the literal table and its root are gone.
+
+**What accepts a constant.** Every reader: `objects_ptr`, `objects_type_of`,
+`_size_of` and `_kind_of` read the entry, and `array_length`,
+`array_range_ptr`, the string functions and `value_unbox` work unchanged.
+Pinning one does nothing. Writing into one — `array_copy` or `array_clear`
+into a constant array — goes to `on_corrupt`, and so does `heap_release`.
+`objects_clone` copies a constant into the heap. A `FieldRVA` array is
+emitted as a constant only when `cli_pack` proves nothing writes it
+([15 §5.1](15_Pack_Time_IL_Transforms.md)).
 
 ---
 
@@ -593,7 +649,7 @@ heap at all:
 | Class structures — type records, vtables, field maps, interface maps | built in RAM at load | **image, `OBJECT_SPACE_CONST`** — read in place from flash, never allocated |
 | Static fields | heap block of `object_t` | **statics slab, `OBJECT_SPACE_STATIC`** — immortal, sized at pack time |
 | Short-lived temporaries and boxes | heap | **frame scratch, `OBJECT_SPACE_FRAME`** — LIFO, released by `ret` |
-| String literals | constant pool | **image bytes + immortal wrappers** |
+| String literals | constant pool | **image bytes, read in place as constants** — §3.5 |
 
 The space tag already gives "different lifecycle ⇒ different region" for
 everything whose lifecycle is statically known. What is left in the
@@ -672,8 +728,8 @@ character — or -1 out of range, which the interpreter turns into
 `IndexOutOfRangeException`. `obj_string_create` validates strictly: overlong
 forms, truncated sequences, surrogates and code points above U+10FFFF return
 `OBJECT_NULL`, and the caller throws or substitutes U+FFFD first. The type id
-of every string is `obj_handler_config_t.string_type` (§9). Interning waits
-for D7, with OH-3.
+of every string is `obj_handler_config_t.string_type` (§9). A literal is a
+constant, and `obj_string_intern` returns its id (§3.5).
 
 ### 5.7 Array payloads — one-dimensional, inline elements
 
@@ -762,9 +818,8 @@ count can wrap past it. Anything else passed in wrong — a bad range to
 means the embedder skipped a check, and goes to `on_corrupt` (§9.2).
 
 An array whose bytes live in the image, such as a `FieldRVA` initialiser
-([15 §5.1](15_Pack_Time_IL_Transforms.md)), uses the same layout; how its type
-and kind are found without a handle is part of D7
-([18 §9](18_ObjectHandler_Build_Plan.md)).
+([15 §5.1](15_Pack_Time_IL_Transforms.md)), uses the same layout as a
+constant: its type, kind and size come from its constant-table entry (§3.5).
 
 ---
 
@@ -1120,7 +1175,7 @@ So the threshold can be wrong, or switched off entirely, without being fatal.
 | Every thread's value stack | walk threads, then slots | self-describing via `stack_slot_t.kind` |
 | Every thread's frame scratch *(tier 2 — §6.3; absent in v1)* | walk the scratch arena | scratch object refmaps |
 | Statics slab | walk the slab | statics reference bitmap |
-| Interned literals | walk `literals[]` (§9, A6) | all entries are object ids |
+| Constants | none: they hold no ids (§3.5) | — |
 | Native scopes | walk the scope chain | every entry is an object id |
 
 "Every thread's" rather than "the thread's" — see
@@ -1277,10 +1332,10 @@ typedef struct {
     uint8_t       * statics;        uint32_t statics_size;
     const uint8_t * statics_refmap;
 
-    const uint8_t * const_base;     /* immutable image, may be flash      */
-    uint32_t        const_count;
+    const uint8_t * const_base;     /* the constant table, may be flash — §3.5 */
+    uint32_t        const_count;    /* entries, reserved entry 0 included; 0: none */
+    uint32_t        const_size;     /* table and payloads, in bytes */
 
-    object_id_t   * literals;       uint32_t literal_count;  /* intern table, a root — A6 */
     uint16_t        string_type;    /* System.String's type id — D9, §5.6 */
 
     uint8_t       * stack_mem;      uint32_t stack_size;     /* all threads */
@@ -1350,6 +1405,8 @@ typedef enum {
     OBJ_HANDLER_E_HANDLES,        /* handles NULL, or handle_count < 2 or > 65536 */
     OBJ_HANDLER_E_WORKLIST,       /* worklist NULL or worklist_len == 0           */
     OBJ_HANDLER_E_HOST_CALLBACK,  /* type_refmap, on_oom or on_corrupt is NULL    */
+    OBJ_HANDLER_E_STATICS,        /* statics malformed, or its refmap marks bytes 0-7 — §3.5 */
+    OBJ_HANDLER_E_CONST,          /* the constant table or one of its entries — §3.5 */
 } obj_handler_status_t;
 ```
 
@@ -1359,7 +1416,7 @@ typedef enum {
 | Order | checks run in enum order and the first failure is returned, so a test can trip exactly one check and assert its code |
 | Atomicity | every check runs before any region or library state is written; a failed init leaves the library uninitialised, and init may simply be called again |
 | Stability | `OBJ_HANDLER_OK` is 0; codes are appended, never renumbered |
-| Growth | a code arrives with the slice that first reads its field — `E_GC_PCT`, `E_STATICS` and `E_CONST` with OH-3 (D7), `E_STACK` with OH-4 — so no code exists without a check and a test |
+| Growth | a code arrives with the slice that first reads its field — `E_STATICS` and `E_CONST` with D7, `E_GC_PCT` with OH-3, `E_STACK` with OH-4 — so no code exists without a check and a test |
 
 The limits behind the codes:
 
@@ -1422,6 +1479,7 @@ The limits behind the codes:
 | Pre-OH-1 review (2026-09-28) | [19](19_Session_Checklist.md) A2–A13, accepted as recommended: one calling thread (§1); C99 baseline (§1.1); a pin count (§3.2); `heap_release` bumps the generation (§3.4); `OBJECT_NULL` only for a request that can never fit (§5.2); stack roots through a registered scanner, no `[ThreadStatic]` (§7.4); scan rule per kind, 4-aligned ids (§7.5); the intern table in the config (§9); `on_corrupt` always returns (§9.2) |
 | Coding OH-1 and OH-2 (2026-09-28) | The debug handle is **10 bytes**, not 12 (§3.2, §9.1). Non-inline accessors check ids in every build (§3.4). A flat-space id has no handle, so no type, size or kind until D7: the accessors send it to `on_corrupt`. `objects_space_register` refuses the heap tags, `OBJECT_SPACE_FRAME`, handled descriptors, a limit outside 1–65536 and re-registration, and does nothing before init. `heap_release` refuses a pinned object. A zero-byte object gets a handle with offset 0 and no block. OH-2 reads the two segment percentages before `E_GC_PCT` exists; a value above 100 only puts the threshold out of reach |
 | String layout (D9, 2026-09-28) | UTF-8 bytes plus a NUL, no header; `OBJECT_H_ASCII` makes `Length` O(1) for ASCII; `Length` and `obj_string_char_at` count UTF-16 units; invalid UTF-8 returns `OBJECT_NULL`; the type id comes from the config — §5.6. Interning waits for D7 |
+| Statics and constants (D7, 2026-09-28) | Statics: a flat space, bytes 0–7 reserved, one refmap bit per word, filled by the embedder, never holding image ids. Constants: an indirect space over a table of 12-byte entries in the image, immutable, never collected, never holding an id. Literals are constants, so `obj_string_intern` allocates nothing; this supersedes A6. B3 settled: a `CONST` index selects a table entry. `E_STATICS` and `E_CONST` — §3.5 |
 | Coding OH-5 (2026-09-28) | `array_create` rejects `count` above 65535, and a `count × elem_size` that cannot fit, before multiplying. `array_copy` sends each id of a reference array through `objects_write_ref`, in overlap-safe order; other elements move by `memmove`, struct ids included (item 3 below). An out-of-range `array_element_byref` has `id` `OBJECT_NULL`. `value_unbox` requires a live box of exactly the size asked. `objects_clone` keeps `OBJECT_H_ASCII` |
 
 **Still open:**
