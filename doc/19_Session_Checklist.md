@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-28**, at commit `d99a6ec`.
+State recorded here: **2026-09-28**, at commit `ce58272`.
 
 ---
 
@@ -28,7 +28,7 @@ project's architecture and rewrites its details
 | `cli_pack` | host tool: reads .NET assemblies, resolves and folds everything it can, writes one `.vxb` image | parser front end done — `source/`, [Phase 0](99_phase0_work.md); the rest not started |
 | `cli_exec` | runs a `.vxb` image, on the device or the host | not started |
 | `cli_dump` | prints an image, for inspection and tests | not started |
-| **ObjectHandler** | standalone C library for objects, the heap, per-thread stacks and the collector; knows nothing about CIL | contract [14](14_ObjectHandler.md), plan [18](18_ObjectHandler_Build_Plan.md); **OH-1, OH-2, OH-5 and D7 built and tested**, one instance per application; OH-3 and OH-4 deferred by the owner |
+| **ObjectHandler** | standalone C library for objects, the heap, per-thread stacks and the collector; knows nothing about CIL | contract [14](14_ObjectHandler.md), plan [18](18_ObjectHandler_Build_Plan.md); **OH-1, OH-2, OH-5 and D7 built and tested**, all state in the application's instance; OH-3 and OH-4 deferred by the owner |
 
 **Current focus: ObjectHandler v1**, built in the order of doc 18 and tested
 until it is the component nobody has to suspect. After it come the image
@@ -73,8 +73,8 @@ Decided. Changing one means changing the contract first.
 | Heap profile (v1) | one collectable segment; `HEAP_MAX_PAYLOAD` 65536; `handle_count = payload_size / 32` | 14 §5.5, §9.1, §9.2 |
 | API widths | every byte and element count is `uint32_t`; type ids and `elem_size` stay 16-bit | 14 §5.2, §8 |
 | Configuration | one configuration for MCU and host; only debug versus release differs | 18 §0.2, 11 §4.6 |
-| Threads | one OS thread per application; green threads preempted at safepoints; 20 ms slice; applications share nothing | 17, 14 §1 |
-| Instances | one `obj_handler_t` per application, taken first by every call and passed to every callback; no mutable globals | 14 §1, §8 |
+| Threads | one application — one CLI binary, one image — on one OS thread; its managed threads are green threads the VM schedules, preempted at safepoints; 20 ms slice; several applications at once is not a use case | 17 §1 |
+| Instances | the application's `obj_handler_t`, taken first by every call and passed to every callback; no mutable globals | 14 §1, §8 |
 | `native int` | 32 bits on every target | 15 §11 |
 | Strings | UTF-8 payloads; `cli_pack` rejects non-ASCII literals unless `--allow-non-ascii` | 14 §5.6 |
 | Arrays | one-dimensional, inline elements, fixed length; the type's refmap describes one element | 14 §5.7 |
@@ -98,8 +98,7 @@ Decided. Changing one means changing the contract first.
   `<string.h>` only ([14 §1](14_ObjectHandler.md)).
 - `on_oom` never returns ([18 D1](18_ObjectHandler_Build_Plan.md)).
 - ObjectHandler keeps no mutable globals: its state is the `obj_handler_t`
-  every call takes, and no object id leaves its instance
-  ([14 §1](14_ObjectHandler.md)).
+  every call takes ([14 §1](14_ObjectHandler.md)).
 - Nothing is copied from `ruffusvm/RuffusVM/RuffusVMTool/`, which is
   GPL/NanoVM code ([13](13_Ruffus_VM_Reuse.md)).
 
@@ -179,6 +178,9 @@ The commands are in §5.3.
 | `ba2afed` | checklist: OH-4 deferred; the several-applications question recorded |
 | `bed86cf` | instances decided (I1–I6): one `obj_handler_t` per application; docs 11, 14, 17, 18 |
 | `d99a6ec` | instances built: every global moved into `obj_handler_t`; `test_instances.c` |
+| `4ec7b8d` | checklist: the instances session |
+| `3f33e07` | application model aligned: one CLI binary, one image, one OS thread; docs 11, 14, 17, 18 |
+| `ce58272` | comments and test names follow the one-application model |
 
 ### 3.2 Code, file by file
 
@@ -240,7 +242,7 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 | OH-1 | **done** — `7ff3a8f` |
 | OH-2 | **done** — `1fe5476` |
 | OH-5 | **built** — `92ff6ea`, interning `e06439e`; `value_compare` (OH-4) and the tracing test (OH-3) wait |
-| Instances (I1–I6) | **done** — decided `bed86cf`, built `d99a6ec` |
+| Instances (A14) | **done** — decided `bed86cf`, built `d99a6ec`, model aligned `3f33e07` |
 | OH-3, OH-4, OH-6 | not started |
 
 ---
@@ -300,14 +302,16 @@ These either land in the first commit's headers or block OH-1.
   from running a negative test to completion. *Decided:* a safe value is
   returned in every build; aborting is the embedder's choice inside
   `on_corrupt`. *Recorded in:* 18 D1, 14 §9.2.
-- [x] **A14 — Instances (I1–I6).** The owner's model: one application is one
-  thread, and several applications are several threads that share nothing.
-  *Decided:* one `obj_handler_t` per application holds all library state (I1);
-  every call takes it first and every callback receives it (I2); A2 holds per
-  instance, and doc 17 gives each application one OS thread (I3); no object
-  id leaves its instance (I4); locks for shared peripherals live in the native
-  and board layer (I5); built at once, before OH-3 and OH-4 (I6).
-  *Recorded in:* 14 §§1, 7.5, 8, 9 and §11; 17 §§1, 5; 11 §7.3; 18 §12.
+- [x] **A14 — Application, threads and the instance.** *Decided:* an
+  application is one CLI binary, packed into one image, and runs on one OS
+  thread; its managed threads are green threads the VM schedules (17 §1).
+  Running several applications at once is not a use case. All library state
+  is in one `obj_handler_t` (I1), which every call takes first and every
+  callback receives (I2), for the no-hidden-state reason of 14 §8; A2 holds
+  for it (I3); built before OH-3 and OH-4 (I6). *Withdrawn the same day:* I4
+  (ids never cross applications) and I5 (locks for peripherals applications
+  share), which assumed several applications. *Recorded in:* 14 §§1, 7.5, 8,
+  9 and §11; 17 §§1, 5; 11 §7.3; 18 §12.
 
 ### B. Documentation cleanup
 
@@ -477,6 +481,15 @@ rm -rf "$d"
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-28, sixth part** — The owner aligned the model: an application
+  is one CLI binary, packed into one image, on one OS thread; managed threads
+  are green threads the VM schedules; several applications at once is not a
+  use case. Docs 11, 14, 17 and 18 now say so (`3f33e07`), and the code's
+  comments and test names follow (`ce58272`). A14 restated: I4 and I5
+  withdrawn; the instance stays, for 14 §8's no-hidden-state rule, and
+  `test_instances.c` now guards that rule rather than a second application.
+  No behaviour changed; 101 cases pass in the three builds.
 
 - **2026-09-28, fifth part** — The owner deferred OH-4 and set the threading
   model: one application is one thread, and several applications are several
