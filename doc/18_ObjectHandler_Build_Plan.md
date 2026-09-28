@@ -245,14 +245,16 @@ name in the table was checked against the standard and common POSIX headers,
 on host gcc and `arm-none-eabi-gcc`, and is clean.
 
 **Location (2026-09-28): `source/object_handler/`, written new.** The
-library is a new implementation beside the Ruffus copy in `ObjectHandler/`,
-not a run of patches to that copy: the Ruffus model — 16-bit ids, no handle
+library is a new implementation, not a run of patches to the Ruffus copy that
+`126dfe2` put in `ObjectHandler/`: the Ruffus model — 16-bit ids, no handle
 table, a three-list collector, boxed stack slots — differs from doc 14 at the
-root, so each patch bought less than the one before. The copy is frozen and
-in no build; each Ruffus module is deleted when the slice that replaces it
-lands, and [19 §3.2](19_Session_Checklist.md) maps module to slice. The
-directory is snake_case like `source/row_table/`, and the rest follows it:
-`tests/object_handler/`, CMake target `object_handler`.
+root, so each patch bought less than the one before. Only `obj_handler.h`
+carried over. The rest of the copy was deleted the same day, because no file
+in it would build against doc 14 without a rewrite; the originals are in
+`ruffusvm/ObjectHandler/`, and this repository's changes to them are in
+history up to `476cd6e`. The directory is snake_case like
+`source/row_table/`, and the rest follows it: `tests/object_handler/`, CMake
+target `object_handler`.
 
 ### D4 — The old draft in `source/framework/`
 
@@ -588,7 +590,8 @@ equal through `value_compare` in OH-5.
 **Work:**
 
 1. `array.c` — the API of 14 §8 over the layout of 14 §5.7, replacing
-   Ruffus's `arrays_type.c`:
+   Ruffus's `arrays_type.c`, whose cut-down version at `476cd6e` already has
+   the element-wise range check and the overflow guard:
    - `array_create` rejects a `count × elem_size` overflow before allocating,
      sets `OBJECT_H_HASREFS` when the type's refmap is non-NULL, and in debug
      checks that the refmap covers exactly `elem_size` bytes;
@@ -705,7 +708,7 @@ and OH-4, not deferred.
 | Debug object identity | **Approved: 8-bit space / 8-bit generation / 16-bit index in debug builds**, release unchanged at 16/16. Both mechanisms adopted — the generation check and the free-handle quarantine. Folded into the contract at 14 §2.1, §3.2, §3.4 and §11 |
 | Init status (2026-09-25) | **`obj_handler_status_t`, returned by `obj_handler_init` only**: eight codes in OH-1, one per thing the embedder has to fix, appended per slice. Errors are returned before init and go to `on_corrupt` after it, so `objects_space_register` is `void`. `HEAP_MAX_PAYLOAD` is 65536 — D1, 14 §9.2 |
 | Array model (2026-09-25) | **Kept, and cut back to what a CIL array is**: one-dimensional, inline elements, fixed length. The type's refmap describes one element; `array_range_ptr` is the only range check; the header moves to `objects_types.h`. Ruffus's list operations are dropped — 14 §5.7 |
-| Location (2026-09-28) | **`source/object_handler/`, a new implementation**, not patches to the Ruffus copy. The copy in `ObjectHandler/` is frozen and retired module by module as the slices replace it. Tests in `tests/object_handler/`, CMake target `object_handler` — D3 |
+| Location (2026-09-28) | **`source/object_handler/`, a new implementation**, not patches to the Ruffus copy. `obj_handler.h` moved there; the rest of `ObjectHandler/` was deleted, the originals staying in `ruffusvm/`. Tests in `tests/object_handler/`, CMake target `object_handler` — D3 |
 
 **Nothing remains open.** D5, D6, D7 and D9 (§9) are scheduled decisions, not
 unresolved ones: each is taken at the start of the slice that consumes it,

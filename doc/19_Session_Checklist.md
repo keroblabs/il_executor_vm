@@ -38,10 +38,9 @@ slices of [00 §4](00_Introduction.md).
 **Where the code is.** `source/` holds the parser, which
 [CMakeLists.txt](../CMakeLists.txt) builds into `cli_parser`. The new
 ObjectHandler is written in `source/object_handler/`, one doc 18 slice at a
-time (A1). `ObjectHandler/` holds the Ruffus VM ObjectHandler, copied
-verbatim in `126dfe2` and changed only where §3.2 says; it is **frozen and in
-no build**, and each of its modules is deleted when the slice that replaces
-it lands.
+time (A1). The Ruffus copy that `126dfe2` put in `ObjectHandler/` is deleted;
+the originals are in `ruffusvm/ObjectHandler/`, and this repository's changes
+to them are in history up to `476cd6e`.
 
 ---
 
@@ -137,8 +136,7 @@ Decided. Changing one means changing the contract first.
 4. **Once OH-T exists,** `ctest` in the debug, release and standalone builds
    replaces steps 1 and 2 (18 §0).
 
-The Ruffus copy is frozen (A1) and no longer compiled; its last baseline, at
-`476cd6e`, was 1 error and 69 warnings. The commands are in §5.3.
+The commands are in §5.3.
 
 ---
 
@@ -162,26 +160,16 @@ The Ruffus copy is frozen (A1) and no longer compiled; its last baseline, at
 
 ### 3.2 Code, file by file
 
-**`source/object_handler/`** — the new library (A1):
+`source/object_handler/`, the new library (A1):
 
 | File | State | Grows in |
 |---|---|---|
 | `obj_handler.h` | include guard and `obj_handler_status_t` (D1); compiles on its own, host and ARM, C99 and C11 | OH-1: init, config and host structs, and an include for each module header as it lands |
 
-**`ObjectHandler/`** — the Ruffus copy, frozen and in no build (A1). Each
-module is deleted when the slice in the last column replaces it:
-
-| File | State | Replaced by |
-|---|---|---|
-| `heap.c/.h` | allocator takes `uint32_t` (`cf433a6`); other known bugs in C5 | OH-2 |
-| `objects.c/.h` | unchanged: 16-bit `object_t`, `CONST_OBJECT_ID` threshold | OH-1 (`objects_types.h`, `objects.c`) |
-| `gc.c/.h` | unchanged: three colour lists, O(n²) search | OH-3 |
-| `stack.c/.h` | unchanged: boxed slots, rejected by 14 §6.6; `stack.c` needs the missing `vm_debug.h` | OH-4 |
-| `obj_string.c/.h` | renamed (`a18881e`, `2bb3152`); still the Ruffus model | OH-5 |
-| `arrays_type.c/.h` | cut to create, length, range pointer and element pointer, overflow-safe (`476cd6e`) | OH-5 (`array.c`) |
-| `value_type.c/.h` | unchanged: boxing helpers, rejected by 14 §6.6 | OH-5 (`value.c`) |
-| `instance.c/.h` | unchanged: hidden `app_instance` global, rejected by 14 §6.6 | OH-1 (`obj_handler_init`, host struct) |
-| `types.h` | unchanged; fails on the ARM compiler — C3 | OH-1 (`<stdint.h>`, 14 §1.1) |
+Nothing else carried over from the Ruffus copy. Every other file was built on
+its model — 16-bit `object_t`, the `app_instance` global, `types.h`, the `T_*`
+mode byte — and none would build against doc 14 without a rewrite. What each
+slice takes from Ruffus, as design rather than code, is in 13 §§4 and 6.
 
 ### 3.3 Documents
 
@@ -223,9 +211,8 @@ the answer is written down.
 These either land in the first commit's headers or block OH-1.
 
 - [x] **A1 — Strategy and code location.** *Decided 2026-09-28:* new files
-  in `source/object_handler/` — snake_case, not `objecthandler` — replacing
-  the Ruffus modules slice by slice. The Ruffus copy is frozen: no further
-  patches, in no build, each module deleted when its replacement lands
+  in `source/object_handler/` — snake_case, not `objecthandler`. Only
+  `obj_handler.h` carried over; the rest of the Ruffus copy is deleted
   (§3.2). Tests go in `tests/object_handler/`; the CMake target is
   `object_handler`. *Recorded in:* 18 D3 and §12, 14 §1.1, 13 §4.
 - [ ] **A2 — Concurrency contract.** State that ObjectHandler is not
@@ -291,6 +278,10 @@ These either land in the first commit's headers or block OH-1.
   closed; reword it to point here.
 - [ ] **B5 — Docs 00, 13, 15 and 17**: check them for the same stale points
   as B1 (strings open, tier 2 shipping).
+- [ ] **B6 — 14 §6.6 and 18 OH-5** tell `value.c` to reimplement Ruffus's
+  "mixed-type promotion table" for `value_compare`. Ruffus has none: its
+  `value_compare` rejects operands of different types. The rules have to come
+  from ECMA-335 Partition III §1.5 instead; settle them with OH-5.
 
 ### C. Build and code chores
 
@@ -303,18 +294,19 @@ These either land in the first commit's headers or block OH-1.
   directory. Needs the owner's confirmation.
 - [x] **C3 — Ruffus `types.h` on ARM.** Every Ruffus file fails on
   `arm-none-eabi-gcc`, because `types.h` redefines `uint32_t` and `int32_t`
-  differently from newlib. *Moot:* A1 froze the copy, and the new headers use
-  `<stdint.h>`.
+  differently from newlib. *Moot:* the copy is deleted, and the new headers
+  use `<stdint.h>`.
 - [x] **C4 — `stack.c`** includes `vm_debug.h`, which was not copied over.
-  *Moot:* A1 froze the copy.
+  *Moot:* the copy is deleted.
 - [x] **C5 — Ruffus `heap.c` bugs.** A failed allocation walks off the end
   of the heap and reports "corrupted" instead of out-of-memory; `heap_init`
   truncates a buffer over 64 KB; blocks are 4-byte aligned but hold 8-byte
-  pointers on a 64-bit host. *Moot:* A1 froze the copy. The new code covers
+  pointers on a 64-bit host. *Moot:* the copy is deleted. The new code covers
   the same ground: OH-2's exhaustion tests and alignment check (18 §4), and
   `E_PAYLOAD_SIZE` (14 §9.2).
-- [ ] **C6 — `obj_string_split`** moves to the embedder as a native: under
-  14 §5.7 it needs the embedder's type id for `string[]`.
+- [x] **C6 — `obj_string_split`** moves to the embedder as a native: under
+  14 §5.7 it needs the embedder's type id for `string[]`. *Moot:* the copy is
+  deleted; the rule moves to OH-5 below.
 - [ ] **C7 — Test harnesses.** The heap and array harnesses of 2026-09-25
   lived only in `/tmp`; OH-T recreates them in `tests/object_handler/`.
 
@@ -336,7 +328,8 @@ These either land in the first commit's headers or block OH-1.
   (includes B3).
 - [ ] **OH-4** — stack: threads, slots, frames (18 §6).
 - [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
-  (18 §7). Decide first: D9 string layout and interning.
+  (18 §7). Decide first: D9 string layout and interning. `String.Split` stays
+  out of `obj_string.c`: it needs the embedder's `string[]` type id (C6).
 - [ ] **OH-6** — hardening: sanitizers, coverage, 32-bit `-Os` build,
   statistics dump (18 §8).
 
@@ -348,7 +341,9 @@ These either land in the first commit's headers or block OH-1.
 - Generational collection (11 §7.7).
 - The four open items in doc 16 and `Thread.Interrupt` semantics (17 §11).
 - `12_VXB_Format.md`, the next contract after ObjectHandler v1
-  (00 §7.1), and `09_Native_BCL_Bridge.md` before the first intrinsic.
+  (00 §7.1), and `09_Native_BCL_Bridge.md` before the first intrinsic. Number
+  formatting and parsing are natives there, written new: Ruffus's `strings.c`
+  prints `0` as an empty string and `3.25` as `3`, and parses `"-5"` as 0.
 
 ---
 
