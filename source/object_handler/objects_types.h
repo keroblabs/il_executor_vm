@@ -79,6 +79,7 @@ typedef struct {
 
 enum {
     OBJECT_H_INUSE   = 0x01,
+    OBJECT_H_ASCII   = 0x02,            /* strings only: every byte below 0x80 (D9) */
     OBJECT_H_MARK    = 0x04,
     OBJECT_H_SCANNED = 0x08,
     OBJECT_H_HASREFS = 0x10,

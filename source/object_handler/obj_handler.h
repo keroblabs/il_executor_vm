@@ -5,6 +5,9 @@
 #include "objects.h"
 #include "heap.h"
 #include "gc.h"
+#include "array.h"
+#include "obj_string.h"
+#include "value.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,6 +54,7 @@ typedef struct {
     uint32_t        const_count;
 
     object_id_t   * literals;       uint32_t literal_count;
+    uint16_t        string_type;    /* the embedder's type id for strings (D9) */
 
     uint8_t       * stack_mem;      uint32_t stack_size;
 

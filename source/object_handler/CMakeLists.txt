@@ -9,6 +9,9 @@ add_library(object_handler STATIC
     objects.c
     heap.c
     gc.c
+    array.c
+    obj_string.c
+    value.c
 )
 
 # The library's include path is its own directory only (doc 18 D3).

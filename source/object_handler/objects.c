@@ -101,12 +101,17 @@ object_id_t objects_clone(object_id_t id)
     const object_handle_t * h = objects_handle_of(id, "objects_clone: not a live heap object");
     object_id_t copy;
     uint32_t size;
+    uint8_t kept;
 
     if (h == NULL)
         return OBJECT_NULL;
     size = h->size;
+    kept = (uint8_t)(h->flags & OBJECT_H_ASCII);
     copy = heap_alloc(OBJECT_SPACE(id), h->type, h->kind, size);
-    if (copy != OBJECT_NULL && size != 0)
+    if (copy == OBJECT_NULL)
+        return OBJECT_NULL;
+    object_spaces[OBJECT_SPACE(copy)].handles[OBJECT_INDEX(copy)].flags |= kept;
+    if (size != 0)
         memcpy(objects_ptr(copy), objects_ptr(id), size);
     return copy;
 }

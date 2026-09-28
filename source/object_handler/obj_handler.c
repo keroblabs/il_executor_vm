@@ -44,6 +44,7 @@ obj_handler_status_t obj_handler_init(const obj_handler_config_t * cfg,
         heap_segment_init(i, cfg->segment[i].payload, cfg->segment[i].payload_size,
                           cfg->segment[i].handles, cfg->segment[i].handle_count,
                           cfg->segment[i].gc_threshold_pct, cfg->segment[i].gc_handle_pct);
+    obj_string_init(cfg->string_type);
     obj_handler_ready = 1;
     return OBJ_HANDLER_OK;
 }
@@ -51,6 +52,7 @@ obj_handler_status_t obj_handler_init(const obj_handler_config_t * cfg,
 void obj_handler_shutdown(void)
 {
     heap_shutdown();
+    obj_string_init(0);
     memset(object_spaces, 0, sizeof object_spaces);
     memset(&obj_handler_host, 0, sizeof obj_handler_host);
     obj_handler_ready = 0;

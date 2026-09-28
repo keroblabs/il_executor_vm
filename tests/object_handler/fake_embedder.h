@@ -10,6 +10,8 @@ enum {
     FAKE_T_DATA = 1,        /* no ids */
     FAKE_T_NODE,            /* word 0 is an id */
     FAKE_T_PAIR,            /* words 0 and 1 are ids */
+    FAKE_T_MIXED,           /* word 0 is an id, word 1 is not */
+    FAKE_T_STRING,          /* config.string_type */
     FAKE_T_COUNT
 };
 

@@ -30,6 +30,9 @@ static const uint8_t * fake_type_refmap(uint16_t type, uint32_t * words)
     case FAKE_T_PAIR:
         *words = 2;
         return fake_map_pair;
+    case FAKE_T_MIXED:
+        *words = 2;
+        return fake_map_node;
     default:
         *words = 0;
         return NULL;
@@ -100,6 +103,7 @@ void fake_config(uint32_t payload_size, uint32_t handle_count)
     fake_cfg.gc_damp_cap_pct             = 90;
     fake_cfg.worklist                    = fake_worklist_mem;
     fake_cfg.worklist_len                = sizeof fake_worklist_mem / sizeof fake_worklist_mem[0];
+    fake_cfg.string_type                 = FAKE_T_STRING;
 }
 
 void fake_init(uint32_t payload_size, uint32_t handle_count)
