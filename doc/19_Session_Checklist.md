@@ -1,0 +1,399 @@
+# Session checklist — where the work stands and what comes next
+
+Living document. **Read it at the start of every session, and update it at
+the end.** It records where the work stands, the rules the work follows, and
+the ordered list of what remains, so that any session can pick up where the
+last one stopped without re-deriving the context from the whole document set.
+
+It does not replace the contracts. [14_ObjectHandler.md](14_ObjectHandler.md)
+says what ObjectHandler *is*; [18_ObjectHandler_Build_Plan.md](18_ObjectHandler_Build_Plan.md)
+says in what order it is built and what proves each step. This document says
+*where we are* on that path and *what to pick up next*. When it disagrees with
+14 or 18, they win and this document is corrected.
+
+State recorded here: **2026-09-25**, at commit `476cd6e`.
+
+---
+
+## 1. The project in one page
+
+**Ruffus CLI** runs .NET programs — CIL, interpreted, no JIT — on
+microcontrollers, with a host build that behaves identically. It succeeds
+**Ruffus VM** (`ruffusvm/`, a 2016 embedded Java VM in C): it keeps that
+project's architecture and rewrites its details
+([13_Ruffus_VM_Reuse.md](13_Ruffus_VM_Reuse.md)).
+
+| Piece | Role | State |
+|---|---|---|
+| `cli_pack` | host tool: reads .NET assemblies, resolves and folds everything it can, writes one `.vxb` image | parser front end done — `source/`, [Phase 0](99_phase0_work.md); the rest not started |
+| `cli_exec` | runs a `.vxb` image, on the device or the host | not started |
+| `cli_dump` | prints an image, for inspection and tests | not started |
+| **ObjectHandler** | standalone C library for objects, the heap, per-thread stacks and the collector; knows nothing about CIL | contract [14](14_ObjectHandler.md), plan [18](18_ObjectHandler_Build_Plan.md); implementation starting |
+
+**Current focus: ObjectHandler v1**, built in the order of doc 18 and tested
+until it is the component nobody has to suspect. After it come the image
+format (`12_VXB_Format.md`, not yet written) and the `cli_pack` / `cli_exec`
+slices of [00 §4](00_Introduction.md).
+
+**Where the code is.** `source/` holds the parser, which
+[CMakeLists.txt](../CMakeLists.txt) builds into `cli_parser`. `ObjectHandler/`
+holds the Ruffus VM ObjectHandler, copied verbatim in `126dfe2` and changed
+only where §3.2 says; it is **not in the build** yet. Doc 14 places the new
+library in `source/objecthandler/`; which of the two the work continues in is
+decision A1.
+
+---
+
+## 2. Parameters of the work
+
+### 2.1 Process
+
+1. **Contract before code, record after** ([00 §7](00_Introduction.md)). A
+   design decision is written into the contract before code depends on it.
+2. **An item marked *(open)* is never guessed at in code.** It is raised,
+   decided and written down first.
+3. **Decisions made while coding are folded back** into
+   [14 §11](14_ObjectHandler.md) for the contract, or
+   [18 §12](18_ObjectHandler_Build_Plan.md) for the plan — the definition of
+   done in 18 §11.
+4. **One logical change per commit.** A file rename is committed on its own,
+   before its content changes, so that git keeps the file's history.
+5. **The owner confirms** deletions, choices between alternatives the docs
+   leave open, and anything hard to undo. A session proposes; it does not
+   decide those alone.
+
+### 2.2 Fixed technical parameters
+
+Decided. Changing one means changing the contract first.
+
+| Parameter | Value | Where |
+|---|---|---|
+| Object reference | `object_id_t`, 32 bits: 16-bit space tag and 16-bit index; a debug build uses 8-bit space, 8-bit generation, 16-bit index | 14 §2.1 |
+| Heap ids | handle-table indices, never payload offsets | 14 §3.2, 18 D2 |
+| Heap profile (v1) | one collectable segment; `HEAP_MAX_PAYLOAD` 65536; `handle_count = payload_size / 32` | 14 §5.5, §9.1, §9.2 |
+| API widths | every byte and element count is `uint32_t`; type ids and `elem_size` stay 16-bit | 14 §5.2, §8 |
+| Configuration | one configuration for MCU and host; only debug versus release differs | 18 §0.2, 11 §4.6 |
+| Threads | one OS thread; green threads preempted at safepoints; 20 ms slice | 17 |
+| `native int` | 32 bits on every target | 15 §11 |
+| Strings | UTF-8 payloads; `cli_pack` rejects non-ASCII literals unless `--allow-non-ascii` | 14 §5.6 |
+| Arrays | one-dimensional, inline elements, fixed length; the type's refmap describes one element | 14 §5.7 |
+| Stack | typed slots and overlapped frames in v1; frame scratch and the size-class recycler deferred | 14 §6.0 |
+| Collector | tricolour mark-sweep, precise, non-moving in v1; a 75 % threshold sets a flag, and a failed allocation collects at once | 14 §7 |
+| Init failures | `obj_handler_status_t`, from `obj_handler_init` only; after init, embedder bugs go to `on_corrupt` | 14 §9.2 |
+
+### 2.3 Hard rules
+
+- The interpreter never recurses into the C stack for a managed call
+  ([17 §2](17_Threading_Model.md)).
+- Every reference store goes through `objects_write_ref`
+  ([14 §6.0](14_ObjectHandler.md)).
+- No raw pointer survives a safepoint: resolve once per opcode
+  ([14 §2.1.1](14_ObjectHandler.md), [11 §4.3](11_Memory_Model.md)).
+- ObjectHandler contains no CIL, ECMA-335 or `.vxb` knowledge, calls neither
+  `malloc` nor `printf`, and its headers compile against `<stdint.h>` and
+  `<string.h>` only ([14 §1](14_ObjectHandler.md)).
+- `on_oom` never returns ([18 D1](18_ObjectHandler_Build_Plan.md)).
+- Nothing is copied from `ruffusvm/RuffusVM/RuffusVMTool/`, which is
+  GPL/NanoVM code ([13](13_Ruffus_VM_Reuse.md)).
+
+### 2.4 Naming and conventions
+
+- **A name carries the module that owns it:** `objects_`/`OBJECT_`,
+  `heap_`/`HEAP_`, `stack_`/`STACK_`, `obj_string_`/`OBJ_STRING_`,
+  `value_`/`VALUE_`, `array_`/`ARRAY_`, `gc_`/`GC_`,
+  `obj_handler_`/`OBJ_HANDLER_`. There is no library-wide prefix; `oh_` and
+  `vee_` are retired ([14 §1.2](14_ObjectHandler.md)).
+- **No file named like a system header, and no identifier C reserves.**
+  `strings.h` shadowed `<strings.h>`, and `strings_*` began with `str` and a
+  lowercase letter ([18 D3](18_ObjectHandler_Build_Plan.md)). Leading
+  underscores at file scope are reserved as well.
+- **Docs:** British spelling, decision-dense, tables, cross-references written
+  as "14 §5.7".
+- **Code comments** state only what the code cannot show, in one short line.
+- **Line endings** are kept per file: most Ruffus headers are CRLF, most `.c`
+  files LF.
+
+### 2.5 Environment
+
+| Item | Value |
+|---|---|
+| Repository | `/home/wifi/projects/cli_parser`; `/home/wifi/projects/ruffusvm` is reference only |
+| Host compiler | gcc 13, Linux |
+| Build | CMake 3.28.3; `cmake --build build` builds `cli_parser` |
+| Device compiler | `/home/wifi/gcc_toolchain/bin/arm-none-eabi-gcc` 14.2.1 with newlib, e.g. `-mcpu=cortex-m4 -mthumb` |
+
+### 2.6 How every change is verified
+
+1. **Compile every ObjectHandler file twice**, with quoted includes and with
+   `-I ObjectHandler`, and diff the diagnostics against the previous run: no
+   new warning, no new error. Baseline at `476cd6e`: 1 error (`stack.c` needs
+   the missing `vm_debug.h`) and 69 warnings, identical in both modes.
+2. **Prove a behaviour change with a harness** that fails before the change
+   and passes after it, one process per case, built with
+   `-fsanitize=address,undefined`.
+3. **Anything meant for the device** also goes through the ARM compiler.
+4. **Once OH-T exists,** `ctest` in the debug, release and standalone builds
+   replaces steps 1 and 2 (18 §0).
+
+The commands are in §5.3.
+
+---
+
+## 3. Where we are
+
+### 3.1 Commits
+
+| Commit | Change |
+|---|---|
+| `126dfe2` | Ruffus VM ObjectHandler copied into `ObjectHandler/` |
+| `5042cea` | documentation updated |
+| `a18881e` | `strings.c/.h` renamed to `obj_string.c/.h` |
+| `2bb3152` | prefix `strings_` → `obj_string_`; docs synced |
+| `cf433a6` | the heap allocator takes `uint32_t` and rejects oversized requests |
+| `e444cb9` | `obj_handler_status_t` (D1); 14 §9.2 |
+| `476cd6e` | arrays: contract in 14 §5.7; `arrays_type` cut down and fixed |
+
+### 3.2 Code — the Ruffus copy, file by file
+
+| File | State | Replaced by |
+|---|---|---|
+| `heap.c/.h` | allocator takes `uint32_t` (`cf433a6`); other known bugs open — C5 | OH-2 |
+| `objects.c/.h` | unchanged: 16-bit `object_t`, `CONST_OBJECT_ID` threshold | OH-1 (`objects_types.h`, `objects.c`) |
+| `gc.c/.h` | unchanged: three colour lists, O(n²) search | OH-3 |
+| `stack.c/.h` | unchanged: boxed slots, rejected by 14 §6.6; `stack.c` needs the missing `vm_debug.h` | OH-4 |
+| `obj_string.c/.h` | renamed (`a18881e`, `2bb3152`); still the Ruffus model | OH-5 |
+| `arrays_type.c/.h` | cut to create, length, range pointer and element pointer, overflow-safe (`476cd6e`) | OH-5 (`array.c`) |
+| `value_type.c/.h` | unchanged: boxing helpers, rejected by 14 §6.6 | OH-5 (`value.c`) |
+| `instance.c/.h` | unchanged: hidden `app_instance` global, rejected by 14 §6.6 | OH-1 (`obj_handler_init`, host struct) |
+| `obj_handler.h` | umbrella, include guard, `obj_handler_status_t` (`e444cb9`) | kept; gains init, config and host structs in OH-1 |
+| `types.h` | unchanged; fails on the ARM compiler — C3 | `<stdint.h>` (14 §1.1) |
+
+### 3.3 Documents
+
+| Doc | State |
+|---|---|
+| [00](00_Introduction.md) | project overview and roadmap; current |
+| [10](10_Native_Assembly_Layout.md) | `Native.*` assemblies; §§4–8 deferred |
+| [11](11_Memory_Model.md) | memory policy; **contradicts 14 in six places** — B1 |
+| `12_VXB_Format.md` | **not written**; the next contract after ObjectHandler v1 |
+| [13](13_Ruffus_VM_Reuse.md) | Ruffus VM heritage; current |
+| [14](14_ObjectHandler.md) | ObjectHandler contract, normative; one false claim in §1 — B2 |
+| [15](15_Pack_Time_IL_Transforms.md) | pack-time IL transforms; current |
+| [16](16_Native_Call_Protocol.md) | native call protocol; four items open |
+| [17](17_Threading_Model.md) | threading model; two items open |
+| [18](18_ObjectHandler_Build_Plan.md) | build plan; §12's "Nothing remains open" is stale — B4 |
+| 19 | this checklist |
+| [99](99_phase0_work.md) | Phase 0 record; history |
+
+### 3.4 Build plan progress
+
+| Doc 18 item | State |
+|---|---|
+| D1 error and failure model | **done** — `obj_handler_status_t`, 14 §9.2 |
+| D2 debug object identity | decided; lands in `objects_types.h` with OH-1 |
+| D3 header isolation and naming | names decided (`objects_types.h`, `obj_string`); the isolated build waits for C1 |
+| D4 old `source/framework/` draft | waits for C2 |
+| OH-T to OH-6 | not started |
+
+---
+
+## 4. Checklist
+
+In order: **A** before any OH-1 code, then **B** and **C**, then the slices
+in **D**. Each item says what to decide or do, what is recommended, and where
+the answer is written down.
+
+### A. Decide first
+
+These either land in the first commit's headers or block OH-1.
+
+- [ ] **A1 — Strategy and code location.** Keep patching the Ruffus copy in
+  `ObjectHandler/`, or start OH-1 as new files in `source/objecthandler/`
+  (14 §1.1, 18 D3) and replace the Ruffus modules slice by slice.
+  *Recommended:* new files. The Ruffus model — 16-bit ids, no handle table,
+  a three-list collector, boxed stack slots — differs from doc 14 at the
+  root, so each further patch buys less. *Record in:* 18 D3 and §3.2 here.
+- [ ] **A2 — Concurrency contract.** State that ObjectHandler is not
+  re-entrant and is called from one thread only; doc 17 guarantees one OS
+  thread, but nothing tells a third-party embedder. *Record in:* 14 §1.
+- [ ] **A3 — Scan rule for the remaining kinds.** How the collector treats
+  `OBJECT_K_STRING`, `OBJECT_K_BOX` and `OBJECT_K_RAW`; objects and arrays
+  are done (14 §7.5, §5.7). *Likely:* strings and raw blocks never scanned,
+  a box scanned with its value type's refmap. *Record in:* 14 §7.
+- [ ] **A4 — Pin depth.** One `OBJECT_H_PINNED` bit cannot express two
+  overlapping pins: the first unpin clears a pin still held. A counter in the
+  handle, or "pins never nest" with a debug assertion. *Record in:* 14 §3.2
+  and §5.3.
+- [ ] **A5 — Compiler baseline.** Define `LIKELY`/`UNLIKELY` with a fallback
+  for non-GCC compilers — 14 §3.3 and 17 §4.2 use them, nothing defines them —
+  and pin the C standard (C99 or C11) and the warning flags. *Record in:*
+  14 §1.1, 18 OH-1.
+- [ ] **A6 — Reserve the literal-table fields.** The interned-literal table
+  is a root (14 §7.4) with no field in `obj_handler_config_t` (14 §9). The
+  struct is the embedder's compile-time contract and freezes in OH-1; its
+  layout can follow with D7 and D9. *Record in:* 14 §9.
+- [ ] **A7 — Collector ↔ stack seam.** How `gc.c` (OH-3) walks the thread
+  stacks that `stack.c` builds in OH-4: a list head owned by `gc.c`, or a
+  root-provider callback. *Record in:* 14 §7.4, 18 §5.
+- [ ] **A8 — Who bumps a handle's generation.** 14 §3.4 and 18 §5 say the
+  sweep; but `heap_release` is what frees a handle, and it runs in OH-2 before
+  any sweep exists. *Recommended:* `heap_release`. *Record in:* 18 D2,
+  14 §3.4.
+- [ ] **A9 — OH-1's stale-id test.** It needs `heap_alloc` and
+  `heap_release`, which arrive in OH-2. Move the test to OH-2, or hand-build a
+  handle table in OH-1. *Record in:* 18 §3.
+- [ ] **A10 — What `heap_alloc` does when memory runs out.** 18 D1 says it
+  returns `OBJECT_NULL`; 14 §5.2 step 5 says it ends by calling `on_oom`,
+  which never returns. Pick one — for example `OBJECT_NULL` only for a request
+  that can never fit, `on_oom` otherwise. *Record in:* 14 §5.2, 18 D1.
+- [ ] **A11 — Id alignment in every payload.** Refmaps work in whole words,
+  so every `object_id_t` in any payload must be 4-byte aligned; only array
+  elements say so (14 §5.7). *Record in:* 14 §7.5, 11 §9.
+- [ ] **A12 — `[ThreadStatic]`, yes or no.** Decide before OH-3: it gives
+  each thread a slice of the statics slab and changes the root list
+  (17 §11). *Record in:* 17 §11, 14 §7.4.
+
+### B. Documentation cleanup
+
+- [ ] **B1 — Doc 11 against doc 14.** Six contradictions:
+  - §4.4 declares `heap_alloc` and `stack_scratch_alloc` with `uint16_t bytes`;
+    14 says `uint32_t`.
+  - §6.2 says to re-size `stack_node_t`, a type from the rejected draft.
+  - §4.4, §6.3, §7.2 and the Slice C row of §11 describe frame scratch and
+    the size-class recycler as shipping; both are deferred (14 §6.0).
+  - §7.2 says "exactly five" root sources; v1 has four.
+  - §7.4's heading says "not allocation failure"; both triggers apply
+    (14 §7.3).
+  - §10 still lists the string representation as open; UTF-8 is decided
+    (14 §5.6).
+- [ ] **B2 — 14 §1** claims `heap.c` compiles without `WANT_OBJECT_HANDLER`.
+  It does not (`heap_t` is defined twice; `flags` and `b_size` are missing).
+- [ ] **B3 — 14 §3.1 against §3.3** on what an `OBJECT_SPACE_CONST` index
+  means — a literal-pool index or a byte offset. Settled by D7.
+- [ ] **B4 — 18 §12's "Nothing remains open"** stays untrue until A is
+  closed; reword it to point here.
+- [ ] **B5 — Docs 00, 13, 15 and 17**: check them for the same stale points
+  as B1 (strings open, tier 2 shipping).
+
+### C. Build and code chores
+
+- [ ] **C1 — CMake.** An `objecthandler` static library whose include path is
+  its own directory only; the standalone `-Wall -Wextra -Werror -pedantic`
+  build; `enable_testing()` with one test per case; debug and release builds
+  (18 D3, OH-1 item 5, OH-T). Depends on A1 and A5.
+- [ ] **C2 — D4.** Delete `source/framework/objects.c/.h` and
+  `stack.c/.h`: CMake builds only `pool.c` and `critical_section.c` from that
+  directory. Needs the owner's confirmation.
+- [ ] **C3 — Ruffus `types.h` on ARM.** Every Ruffus file fails on
+  `arm-none-eabi-gcc`, because `types.h` redefines `uint32_t` and `int32_t`
+  differently from newlib. Moot once OH-1's headers use `<stdint.h>`; fix it
+  only if a Ruffus module must build for the device before then.
+- [ ] **C4 — `stack.c`** includes `vm_debug.h`, which was not copied over.
+  Moot once OH-4 replaces it.
+- [ ] **C5 — Ruffus `heap.c` bugs.** A failed allocation walks off the end
+  of the heap and reports "corrupted" instead of out-of-memory; `heap_init`
+  truncates a buffer over 64 KB; blocks are 4-byte aligned but hold 8-byte
+  pointers on a 64-bit host. Moot once OH-2 replaces it.
+- [ ] **C6 — `obj_string_split`** moves to the embedder as a native: under
+  14 §5.7 it needs the embedder's type id for `string[]`.
+- [ ] **C7 — Test harnesses.** The heap and array harnesses of 2026-09-25
+  lived only in `/tmp`; OH-T recreates them in `tests/objecthandler/`.
+
+### D. Build plan slices — doc 18
+
+- [x] **D1** — error and failure model: `obj_handler_status_t` (`e444cb9`).
+- [ ] **D2** — debug object identity, written into `objects_types.h`.
+- [ ] **D3** — header isolation: names done; the isolated build needs C1.
+- [ ] **D4** — the old `source/framework/` draft: C2.
+- [ ] **OH-T** — test system: `harness.h`, fake embedder, fault injection,
+  replay, CTest (18 §2).
+- [ ] **OH-1** — foundation: types, configuration, spaces, resolution,
+  `obj_handler_init` with the checks of 14 §9.2 (18 §3).
+- [ ] **OH-2** — allocator: new `heap.c`, free list, `heap_release`,
+  `heap_verify`, statistics (18 §4).
+- [ ] **OH-3** — collector (18 §5). Decide first: D5 rooting-scope API, D6
+  `gc_poll` and the safepoint contract, D7 statics slab and literal pool
+  (includes B3).
+- [ ] **OH-4** — stack: threads, slots, frames (18 §6).
+- [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
+  (18 §7). Decide first: D9 string layout and interning.
+- [ ] **OH-6** — hardening: sanitizers, coverage, 32-bit `-Os` build,
+  statistics dump (18 §8).
+
+### E. Later, not blocking
+
+- Finalizers and weak references (14 §11, item 1).
+- The tuning constants, which need host measurements (14 §11, item 2).
+- Struct copies and the write barrier, decided with tier 2 (14 §11, item 3).
+- Generational collection (11 §7.7).
+- The four open items in doc 16 and `Thread.Interrupt` semantics (17 §11).
+- `12_VXB_Format.md`, the next contract after ObjectHandler v1
+  (00 §7.1), and `09_Native_BCL_Bridge.md` before the first intrinsic.
+
+---
+
+## 5. Session protocol
+
+### 5.1 Starting a session
+
+1. Read §3 and §4 of this document.
+2. Run `git log --oneline -10` and `git status`, and compare them with §3.1
+   and the last entry in §6.
+3. Take the first open item in §4 — or the one the owner names — and read the
+   doc sections it cites before changing anything.
+
+### 5.2 Finishing a session
+
+1. Tick what is done; add every new finding to §4 under A–E, with a pointer to
+   the doc section it concerns.
+2. Fold decisions into 14 §11 or 18 §12 (§2.1, rule 3).
+3. Update §3 where the state changed, and the "state recorded here" line at
+   the top.
+4. Add an entry to §6.
+5. Commit the docs together with the code they describe.
+
+### 5.3 Verification recipes
+
+```bash
+cd /home/wifi/projects/cli_parser
+
+# 1. Every ObjectHandler file, both include modes; diff against the last run.
+for mode in quote I; do
+  for f in ObjectHandler/*.c; do
+    extra=""; [[ $mode == I ]] && extra="-IObjectHandler"
+    gcc -std=gnu11 -fsyntax-only -Wall -Wextra -DWANT_OBJECT_HANDLER $extra "$f" 2>&1 |
+      grep -E "(error|warning):" | sed -E 's/:[0-9]+:[0-9]+:/:/' | sed "s|^|$(basename $f): |"
+  done | sort > /tmp/diag_$mode.txt
+done
+
+# 2. The device compiler.
+/home/wifi/gcc_toolchain/bin/arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb \
+  -std=gnu11 -fsyntax-only -DWANT_OBJECT_HANDLER ObjectHandler/heap.c
+
+# 3. A harness against the Ruffus modules, one case per process.
+gcc -std=gnu11 -g -O0 -fsanitize=address,undefined -DWANT_OBJECT_HANDLER \
+  -iquote ObjectHandler test.c ObjectHandler/objects.c ObjectHandler/heap.c \
+  ObjectHandler/arrays_type.c ObjectHandler/obj_string.c -o test
+```
+
+A harness against the Ruffus modules must define `app_instance_t * app_instance`
+and `void object_garbage_collection(void)`, and give `heap_init` a buffer with
+8 zeroed bytes past its end: because of C5, a failed allocation walks one
+header past the heap, and the zeroed header stops it. Expect pre-existing
+UBSan alignment reports from `heap.c` (C5); none may come from the code under
+test.
+
+---
+
+## 6. Session log
+
+Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-25** — Reviewed docs 00–18 for readiness. Heap allocator widened
+  to `uint32_t` (`cf433a6`). `strings` renamed to `obj_string`, files and
+  prefix, after finding it shadowed `<strings.h>` on host and ARM compilers
+  (`a18881e`, `2bb3152`). D1 settled: `obj_handler_status_t`, 14 §9.2
+  (`e444cb9`). Array model settled in 14 §5.7; `arrays_type` cut from eleven
+  public functions to four, with its overflow and out-of-memory bugs fixed
+  (`476cd6e`). Found that no Ruffus file compiles for ARM (C3). This checklist
+  created.

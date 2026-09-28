@@ -6,7 +6,9 @@ step*. It is a living document: each slice, once landed, is struck through
 here and its consequences folded back into 14 §11.
 
 Status: **reviewed and settled — ready to start.** Every review item in §12 is
-closed; nothing here is built yet.
+closed; nothing here is built yet. Progress against this plan, and the
+decisions still to take before OH-1, are tracked in
+[19_Session_Checklist.md](19_Session_Checklist.md).
 
 **Scope rule.** This plan covers ObjectHandler alone — no `cli_exec`, no
 `cli_pack`, no image. The embedder is a ~150-line fake in the test tree, which

@@ -5,6 +5,10 @@ metadata parser** into a **virtual execution engine (VEE)** that runs a .NET
 assembly by **interpreting CIL/IL bytecode** — no JIT, no native code
 emission.
 
+> **Where the work stands and what comes next:**
+> [19_Session_Checklist.md](19_Session_Checklist.md). Read it first in every
+> session.
+
 ## Architecture — three tools, one format
 
 The project is split into a **host-side toolchain** and a **portable
@@ -1117,6 +1121,12 @@ after** — not as speculative design ahead of both.
   on, poll placement, and why this makes precise stop-the-world collection
   easier rather than harder. Post-milestone, but with Slice A and C
   obligations.
+- [18_ObjectHandler_Build_Plan.md](18_ObjectHandler_Build_Plan.md) — the
+  order ObjectHandler is written in: the P0 decisions, the test system, and
+  the slices OH-1 to OH-6 with the tests that define each as done.
+- [19_Session_Checklist.md](19_Session_Checklist.md) — where the work
+  stands, the rules it follows, and the ordered checklist of what remains.
+  **Read first in every session; update at the end.**
 - [10_Native_Assembly_Layout.md](10_Native_Assembly_Layout.md) — the
   `Native.*` assembly matrix, ref/impl split, `nativegen`, per-peripheral
   host behaviour, and the future AOT work. **§§4–8 are deferred** until
