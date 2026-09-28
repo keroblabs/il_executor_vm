@@ -1,14 +1,6 @@
 #ifndef OBJ_HANDLER_H
 #define OBJ_HANDLER_H
 
-#include "arrays_type.h"
-#include "heap.h"
-#include "instance.h"
-#include "objects.h"
-#include "stack.h"
-#include "obj_string.h"
-#include "value_type.h"
-
 /* obj_handler_init result, checked in this order; append only (doc 14 section 9.2) */
 typedef enum {
     OBJ_HANDLER_OK = 0,
