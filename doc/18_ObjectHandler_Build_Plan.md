@@ -223,9 +223,9 @@ The full set:
 
 | File | Holds | Prefix it exports |
 |---|---|---|
-| `objects_types.h` | `object_id_t`, id macros, `object_handle_t`, `object_space_t`, `object_byref_t`, `OBJECT_H_*`, `OBJECT_K_*`, `array_header_t` (read by `gc.c` — 14 §5.7) | `OBJECT_` / `objects_` |
+| `objects_types.h` | `object_id_t`, id macros, `object_handle_t`, `object_space_t`, `object_byref_t`, `OBJECT_H_*`, `OBJECT_K_*`, `array_header_t` (read by `gc.c` — 14 §5.7); the instance `obj_handler_t` and the host callbacks it holds (14 §1) | `OBJECT_` / `objects_` |
 | `obj_handler_config.h` | the single configuration (§0.2) and the debug switches | `OBJECT_` / `HEAP_` / `STACK_` per owner |
-| `obj_handler.h` | umbrella; `obj_handler_init/shutdown`, `obj_handler_config_t`, `obj_handler_host_t`, `obj_handler_status_t` | `obj_handler_` |
+| `obj_handler.h` | umbrella; `obj_handler_init/shutdown`, `obj_handler_config_t`, `obj_handler_status_t` | `obj_handler_` |
 | `heap.h`, `objects.h`, `gc.h`, `stack.h`, `array.h`, `obj_string.h`, `value.h` | one module each | their own |
 
 The `object_handler` target's include path contains **only**
@@ -393,7 +393,7 @@ initialises from a caller-supplied config and refuses a malformed one.
    `OBJECT_SPACE_COUNT`, `HEAP_SEGMENTS`, `OBJ_STRING_ENCODING`, worklist
    length, scope depth, and the four debug switches with their debug/release
    defaults.
-3. `objects.c` — the `object_spaces[]` table, `objects_space_register`, the
+3. `objects.c` — the space table, `objects_space_register`, the
    three resolution paths (handled / flat / indirect→`on_corrupt` in v1),
    `objects_type_of` / `size_of` / `kind_of`, and `objects_write_ref` +
    `objects_escape` as the identity pair required by 14 §6.0.
@@ -731,6 +731,7 @@ and OH-4, not deferred.
 | Statics and constants (D7, 2026-09-28) | Decided ahead of OH-3, at the owner's request, and built at once: both spaces configured by `obj_handler_init` with `E_STATICS` and `E_CONST`, constants accepted by every reader, `obj_string_intern` returning constant ids. Supersedes A6 — 14 §3.5 |
 | Coding D7 (2026-09-28) | Built in `e06439e`, with `test_spaces.c`: 16 cases, among them one per malformed statics slab and one per malformed constant entry, and a fake embedder that lays out constant tables the way `cli_pack` will. Three mutants — no refmap check, no upper bound on constant indices, writes into constants allowed — were each caught |
 | Coding OH-5 (2026-09-28) | The element-refmap check in `array_create` sits under `OBJECT_DEBUG_REFS`. Reference arrays copy through the barrier element by element; everything else by `memmove`. Boxing tests live in `test_value.c`, which the §2.4 tree gains |
+| Instances (I1–I6, 2026-09-28) | At the owner's request, before OH-3 and OH-4: every global moved into `obj_handler_t`, which every call takes first and every callback receives — 14 §1, §8. `objects_shutdown` and `obj_string_init` are gone, since shutdown zeroes the instance. `test_instances.c` runs two instances side by side, among them a seeded interleaving where one runs out of memory beside the other; a heap pointer kept inside `heap.c` fails three of its four cases |
 
 **Nothing remains open before OH-3:** A1–A13 are settled
 ([19 §4](19_Session_Checklist.md)). D5, D6, D7 and D9 (§9) are scheduled decisions, not

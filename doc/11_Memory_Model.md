@@ -465,9 +465,10 @@ Consequences that the rest of the system depends on:
   stops at a safepoint — so there is no suspension protocol, no signal, and
   no poll page. See [17_Threading_Model.md §5](17_Threading_Model.md).
 
-This resolves what earlier drafts left open. It holds because there is
-exactly one OS thread; real parallelism would reintroduce all of it, which is
-why the image records `CAP_SINGLE_OS_THREAD`.
+This resolves what earlier drafts left open. It holds because each
+application has exactly one OS thread and shares no objects with another
+([14 §1](14_ObjectHandler.md)); real parallelism inside an application would
+reintroduce all of it, which is why the image records `CAP_SINGLE_OS_THREAD`.
 
 ### 7.4 When it runs
 
@@ -646,8 +647,9 @@ Carried forward deliberately. None blocks Slice A; all block Slice C.
   space tag and an index; handle-indexed for collectable spaces, direct for
   the rest. The heap stays 16-bit addressable on purpose. See
   [14_ObjectHandler.md §2](14_ObjectHandler.md).
-- ~~Threading~~ — **decided.** Green threads on one OS thread, preemptively
-  scheduled at safepoints. See [17_Threading_Model.md](17_Threading_Model.md).
+- ~~Threading~~ — **decided.** Green threads on one OS thread per
+  application, preemptively scheduled at safepoints; applications share
+  nothing. See [17_Threading_Model.md](17_Threading_Model.md).
 - ~~Naming~~ — **decided.** No library-wide prefix; the prefix is the owning
   ObjectHandler module ([14 §1.2](14_ObjectHandler.md)).
 - ~~Sizing~~ — **decided.** Everything but the heap payload is computed by

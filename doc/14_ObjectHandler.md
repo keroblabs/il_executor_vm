@@ -43,10 +43,17 @@ What the library *does* own, and what the embedder must therefore not
 duplicate: object identity, object lifetime, the layout of the heap, the
 layout of the execution stack, and the definition of a frame.
 
-**Concurrency (A2).** The library is not re-entrant and is called from one
-thread only. Doc 17 gives Ruffus CLI one OS thread; any other embedder must
-serialise its calls, and no host callback (§7.5) may call back into the
-library.
+**Instances and concurrency (A2, I1–I4).** All library state lives in an
+`obj_handler_t` that the embedder provides, one per application: the space
+table, the heap segments, where the constants are, the host callbacks. The
+library keeps no mutable globals, and every call takes its instance first
+(§8). An instance is not re-entrant and is used by one thread at a time;
+different instances may run at the same time on different threads, because
+they share nothing that changes. Doc 17 gives each application one OS
+thread. An object id means nothing outside its instance, so applications
+exchange copied values, never ids. No host callback (§7.5) may call back
+into the library. Locks for what applications do share — peripherals,
+the file system — belong to the native and board layer (I5).
 
 ### 1.1 Layout
 
@@ -364,11 +371,9 @@ typedef struct {
     uint16_t          flags;    /* OBJECT_SP_* : COLLECTED | WRITABLE | ROOT */
 } object_space_t;
 
-extern object_space_t object_spaces[OBJECT_SPACE_COUNT];
-
-static inline void * objects_ptr(object_id_t id)
+static inline void * objects_ptr(obj_handler_t * oh, object_id_t id)
 {
-    const object_space_t * sp = &object_spaces[OBJECT_SPACE(id)];
+    const object_space_t * sp = &oh->spaces[OBJECT_SPACE(id)];
 
     if (OBJECT_LIKELY(sp->handles != NULL))             /* heap segment      */
         return sp->base + sp->handles[OBJECT_INDEX(id)].offset;
@@ -376,7 +381,7 @@ static inline void * objects_ptr(object_id_t id)
     if (OBJECT_LIKELY(sp->base != NULL))                /* flat space        */
         return sp->base + OBJECT_INDEX(id);
 
-    return objects_resolve_indirect(id);                /* native descriptor */
+    return objects_resolve_indirect(oh, id);            /* native descriptor */
 }
 ```
 
@@ -387,8 +392,8 @@ the inline path (§3.5). The
 is unchanged and is what keeps this off the critical path.
 
 `OBJECT_SPACE_COUNT` is a compile-time profile constant. An MCU build sets it
-to `0x0014`, so `object_spaces` is 20 records — 320 bytes — and the embedder
-range costs nothing.
+to `0x0014`, so an instance's space table is 20 records — 320 bytes — and the
+embedder range costs nothing.
 
 ### 3.4 Debug resolution
 
@@ -545,7 +550,8 @@ changes no semantics.
 ### 5.2 Allocation
 
 ```c
-object_id_t heap_alloc(uint16_t space, uint16_t type, uint8_t kind, uint32_t bytes);
+object_id_t heap_alloc(obj_handler_t * oh, uint16_t space, uint16_t type, uint8_t kind,
+                       uint32_t bytes);
 ```
 
 **`bytes` is 32 bits even though the v1 payload is not.** The allocator's own
@@ -973,7 +979,7 @@ high-water mark, releasing everything the frame allocated in one store.
 **This is exactly Ruffus's `CONST_OBJECT_ID` test generalised.** Ruffus
 writes `if (object >= CONST_OBJECT_ID) continue;` in five places in `gc.c`.
 Here the collector writes
-`if (!(object_spaces[OBJECT_SPACE(id)].flags & OBJECT_SP_COLLECTED)) continue;`
+`if (!(oh->spaces[OBJECT_SPACE(id)].flags & OBJECT_SP_COLLECTED)) continue;`
 once, and gets constants, statics, scratch, foreign memory and every
 embedder-defined space for the same instruction.
 
@@ -1137,7 +1143,7 @@ failure.
 
 ```c
 if (segment->used + bytes > segment->collect_at)
-    gc_request();            /* collect at the next safepoint */
+    gc_request(oh);          /* collect at the next safepoint */
 ```
 
 | Knob | Default | Note |
@@ -1202,14 +1208,16 @@ typedef struct {
     /* Reference bitmap for a type: bit i set => word i of the payload
        is an object_id_t. Return NULL if the type contains no ids.
        For an array type, the bitmap of one element (§5.7).           */
-    const uint8_t * (*type_refmap)(uint16_t type, uint32_t * words);
+    const uint8_t * (*type_refmap)(obj_handler_t * oh, uint16_t type, uint32_t * words);
 
-    void (*on_oom)(void);
-    void (*on_corrupt)(const char * where, object_id_t id);
+    void (*on_oom)(obj_handler_t * oh);
+    void (*on_corrupt)(obj_handler_t * oh, const char * where, object_id_t id);
 } obj_handler_host_t;
 ```
 
-Three callbacks, all required (§9.2). Everything else the collector needs is
+Three callbacks, all required (§9.2). Each receives the instance that calls
+it, so an embedder running several applications knows whose type table to
+read and which application to stop (I2). Everything else the collector needs is
 in the handle or, for an array, in its payload header (§5.7), which is why
 there is no `array_shape` callback.
 
@@ -1236,36 +1244,39 @@ One header per module; `obj_handler.h` includes them all, exactly as Ruffus's
 
 ```c
 /* ---- obj_handler.h : library lifecycle ------------------------------ */
-obj_handler_status_t obj_handler_init(const obj_handler_config_t * cfg,
+obj_handler_status_t obj_handler_init(obj_handler_t * oh,
+                                      const obj_handler_config_t * cfg,
                                       const obj_handler_host_t   * host);
-void                 obj_handler_shutdown(void);
+void                 obj_handler_shutdown(obj_handler_t * oh);
 
 /* ---- objects.h : identity, resolution, lifetime --------------------- */
-static inline void * objects_ptr(object_id_t id);
-static inline void * objects_byref_ptr(object_byref_t b);
-uint16_t    objects_type_of(object_id_t id);
-uint32_t    objects_size_of(object_id_t id);
-uint8_t     objects_kind_of(object_id_t id);
+static inline void * objects_ptr(obj_handler_t * oh, object_id_t id);
+static inline void * objects_byref_ptr(obj_handler_t * oh, object_byref_t b);
+uint16_t    objects_type_of(obj_handler_t * oh, object_id_t id);
+uint32_t    objects_size_of(obj_handler_t * oh, object_id_t id);
+uint8_t     objects_kind_of(obj_handler_t * oh, object_id_t id);
 
-object_id_t objects_create(uint16_t type, uint32_t bytes);   /* newobj      */
-object_id_t objects_clone(object_id_t id);
-object_id_t objects_promote(object_id_t id);                 /* scratch->heap */
-static inline object_id_t objects_escape(object_id_t id);
-static inline void objects_write_ref(object_id_t * slot, object_id_t value);
+object_id_t objects_create(obj_handler_t * oh, uint16_t type, uint32_t bytes); /* newobj */
+object_id_t objects_clone(obj_handler_t * oh, object_id_t id);
+object_id_t objects_promote(obj_handler_t * oh, object_id_t id);       /* scratch->heap */
+static inline object_id_t objects_escape(obj_handler_t * oh, object_id_t id);
+static inline void objects_write_ref(obj_handler_t * oh, object_id_t * slot,
+                                     object_id_t value);
 
-void *      objects_pin(object_id_t id);
-void        objects_unpin(object_id_t id);
-void        objects_space_register(uint16_t tag, const object_space_t * desc);
+void *      objects_pin(obj_handler_t * oh, object_id_t id);
+void        objects_unpin(obj_handler_t * oh, object_id_t id);
+void        objects_space_register(obj_handler_t * oh, uint16_t tag,
+                                   const object_space_t * desc);
 
 /* ---- heap.h : the payload allocator --------------------------------- */
-object_id_t heap_alloc(uint16_t space, uint16_t type,
+object_id_t heap_alloc(obj_handler_t * oh, uint16_t space, uint16_t type,
                        uint8_t kind, uint32_t bytes);
-void        heap_stats(heap_stats_t * out);
-uint32_t    heap_in_use(void);
-uint32_t    heap_largest_free(void);        /* fragmentation ratio — §5.4 */
+void        heap_stats(obj_handler_t * oh, heap_stats_t * out);
+uint32_t    heap_in_use(obj_handler_t * oh);
+uint32_t    heap_largest_free(obj_handler_t * oh);  /* fragmentation ratio — §5.4 */
 
 /* ---- stack.h : threads, frames, slots, scratch ---------------------- */
-stack_thread_t * stack_thread_create(uint32_t stack_bytes,
+stack_thread_t * stack_thread_create(obj_handler_t * oh, uint32_t stack_bytes,
                                      uint32_t scratch_bytes);
 stack_frame_t  * stack_frame_push(stack_thread_t * t, uint16_t method,
                                   uint8_t arg_slots, uint8_t local_slots,
@@ -1276,29 +1287,35 @@ object_id_t      stack_scratch_alloc(stack_thread_t * t, uint16_t type,
 /* push/pop/peek per slot kind are static inline in stack.h              */
 
 /* ---- array.h / obj_string.h / value.h : typed constructors ----------- */
-object_id_t array_create(uint16_t type, uint16_t elem_size, uint32_t count);  /* §5.7 */
-uint32_t    array_length(object_id_t id);
-void *      array_range_ptr(object_id_t id, uint32_t index, uint32_t count); /* NULL: out of range */
-static inline void * array_element_ptr(object_id_t id, uint32_t index);     /* a range of one */
-object_byref_t array_element_byref(object_id_t id, uint32_t index);         /* ldelema */
-void        array_copy(object_id_t dst, uint32_t dst_index,
+object_id_t array_create(obj_handler_t * oh, uint16_t type, uint16_t elem_size,
+                         uint32_t count);                                     /* §5.7 */
+uint32_t    array_length(obj_handler_t * oh, object_id_t id);
+void *      array_range_ptr(obj_handler_t * oh, object_id_t id, uint32_t index,
+                            uint32_t count);                     /* NULL: out of range */
+static inline void * array_element_ptr(obj_handler_t * oh, object_id_t id,
+                                       uint32_t index);          /* a range of one */
+object_byref_t array_element_byref(obj_handler_t * oh, object_id_t id,
+                                   uint32_t index);                         /* ldelema */
+void        array_copy(obj_handler_t * oh, object_id_t dst, uint32_t dst_index,
                        object_id_t src, uint32_t src_index, uint32_t count);
-void        array_clear(object_id_t id, uint32_t index, uint32_t count);
+void        array_clear(obj_handler_t * oh, object_id_t id, uint32_t index, uint32_t count);
 
-object_id_t obj_string_create(const char * utf8, uint32_t len); /* §5.6 */
-object_id_t obj_string_intern(uint16_t literal_index);
-object_id_t obj_string_concat(object_id_t a, object_id_t b);
-uint32_t    obj_string_length(object_id_t id);
-int32_t     obj_string_char_at(object_id_t id, uint32_t index);  /* -1: out of range */
+object_id_t obj_string_create(obj_handler_t * oh, const char * utf8, uint32_t len); /* §5.6 */
+object_id_t obj_string_intern(obj_handler_t * oh, uint16_t literal_index);
+object_id_t obj_string_concat(obj_handler_t * oh, object_id_t a, object_id_t b);
+uint32_t    obj_string_length(obj_handler_t * oh, object_id_t id);
+int32_t     obj_string_char_at(obj_handler_t * oh, object_id_t id,
+                               uint32_t index);                  /* -1: out of range */
 
-object_id_t value_box(uint16_t type, const void * src, uint32_t bytes);
-void        value_unbox(object_id_t id, void * dst, uint32_t bytes);
-int32_t     value_compare(const stack_slot_t * a, const stack_slot_t * b);
+object_id_t value_box(obj_handler_t * oh, uint16_t type, const void * src, uint32_t bytes);
+void        value_unbox(obj_handler_t * oh, object_id_t id, void * dst, uint32_t bytes);
+int32_t     value_compare(obj_handler_t * oh, const stack_slot_t * a,
+                          const stack_slot_t * b);
 
 /* ---- gc.h : the collector ------------------------------------------- */
-void     gc_collect(void);
-void     gc_request(void);                  /* set the flag — §7.3        */
-void     gc_stats(gc_stats_t * out);
+void     gc_collect(obj_handler_t * oh);
+void     gc_request(obj_handler_t * oh);    /* set the flag — §7.3        */
+void     gc_stats(obj_handler_t * oh, gc_stats_t * out);
 ```
 
 Every byte count and element count in this API is 32-bit, and stays 32-bit
@@ -1306,10 +1323,18 @@ when the v1 payload cap is lifted (§2.3.1). Sizes that describe a *type* —
 `type`, `elem_size`, `literal_index` — stay 16-bit because widening them is an
 embedder question, not a heap question.
 
-Every accessor takes its `stack_thread_t *` explicitly. Ruffus's
-`instance_get_current()` inside every stack accessor is a hidden global load
-on the hottest path in the VM; the thread pointer is already in the
-interpreter's hands and should be passed.
+**Every call takes its instance first, and every per-thread stack call its
+`stack_thread_t *` (I2).** A thread belongs to the instance that created it,
+so the per-thread calls need nothing more. Ruffus reaches both through hidden
+globals — `app_instance`, switched per application, and
+`instance_get_current()` inside every stack accessor — which costs a load on
+the hottest path in the VM and gives every thread the same pointer. Both are
+already in the interpreter's hands and are passed; a native reaches the
+instance through the `exec_thread_t *` its thunk receives
+([16](16_Native_Call_Protocol.md)). Measured on Cortex-M4 at `-O2`,
+resolving an id takes 9 instructions with the instance passed, 10 through
+file-scope globals, and 11 through a switched current-instance pointer;
+`__thread` becomes a call to `__emutls_get_address`, which allocates.
 
 ---
 
@@ -1352,6 +1377,13 @@ when the cap is lifted. v1 validates each against its 16-bit profile limit in
 An MCU build declares these as `static` arrays and performs no dynamic
 allocation before `main`. A host build `mmap`s the image and `malloc`s the
 rest once. Neither path is inside the library.
+
+**The instance is one more region (I1).** The embedder declares one
+`obj_handler_t` per application — `static obj_handler_t app_oh;` on an MCU,
+zeroed as static storage is — and passes it to `obj_handler_init` with that
+application's config. Its fields are the library's; the embedder only
+allocates it. It is 444 bytes on Cortex-M4 with the v1 profile, and
+`obj_handler_shutdown` zeroes it again.
 
 ### 9.1 Sizing the handle table
 
@@ -1397,8 +1429,8 @@ returned; after that, an embedder bug goes to `on_corrupt`.** This is also why
 ```c
 typedef enum {
     OBJ_HANDLER_OK = 0,
-    OBJ_HANDLER_E_ARG_NULL,       /* cfg or host is NULL                          */
-    OBJ_HANDLER_E_ALREADY_INIT,   /* already initialised; shut down first         */
+    OBJ_HANDLER_E_ARG_NULL,       /* oh, cfg or host is NULL                      */
+    OBJ_HANDLER_E_ALREADY_INIT,   /* this instance is initialised; shut it down first */
     OBJ_HANDLER_E_SEGMENTS,       /* segments == 0 or > HEAP_SEGMENTS             */
     OBJ_HANDLER_E_PAYLOAD_BASE,   /* payload NULL or not 8-byte aligned           */
     OBJ_HANDLER_E_PAYLOAD_SIZE,   /* < 16, > HEAP_MAX_PAYLOAD, or not a multiple of 8 */
@@ -1414,7 +1446,7 @@ typedef enum {
 |---|---|
 | Granularity | one code per thing the embedder has to fix; its comment says what |
 | Order | checks run in enum order and the first failure is returned, so a test can trip exactly one check and assert its code |
-| Atomicity | every check runs before any region or library state is written; a failed init leaves the library uninitialised, and init may simply be called again |
+| Atomicity | every check runs before any region or instance field is written; a failed init leaves the instance uninitialised, and init may simply be called again |
 | Stability | `OBJ_HANDLER_OK` is 0; codes are appended, never renumbered |
 | Growth | a code arrives with the slice that first reads its field — `E_STATICS` and `E_CONST` with D7, `E_GC_PCT` with OH-3, `E_STACK` with OH-4 — so no code exists without a check and a test |
 
@@ -1448,6 +1480,7 @@ The limits behind the codes:
 | `object_t` as `uint16_t` | **widened** to `object_id_t` |
 | Boxed primitives on the stack (`stack.h`, `value_type.c`) | **rejected** — §6.1 |
 | `instance_get_current()` inside stack accessors | **rejected** — thread passed explicitly |
+| `app_instance`, one global pointer switched per application | **replaced** — an `obj_handler_t` per application, passed to every call — §1, §8 |
 | Heap ≤ 64 KB | **kept as the v1 profile**, per segment; the id abstracts it — §2.3.1 |
 | Arrays as growable lists (`array_insert`, `array_delete`, in-place resize) | **rejected** — CIL arrays have a fixed length; `List<T>` grows in managed code — §5.7 |
 | Element size re-derived from a mode byte (`T_ARRAY + mode`, `T_DATA`) | **replaced** — `elem_size` in the header, element layout from the type's refmap — §5.7 |
@@ -1482,6 +1515,7 @@ The limits behind the codes:
 | Statics and constants (D7, 2026-09-28) | Statics: a flat space, bytes 0–7 reserved, one refmap bit per word, filled by the embedder, never holding image ids. Constants: an indirect space over a table of 12-byte entries in the image, immutable, never collected, never holding an id. Literals are constants, so `obj_string_intern` allocates nothing; this supersedes A6. B3 settled: a `CONST` index selects a table entry. `E_STATICS` and `E_CONST` — §3.5 |
 | Coding D7 (2026-09-28) | Every reader goes through one library-internal view, `objects_info`, which answers from a heap handle or a constant entry alike. A constant id with a non-zero generation is refused in debug. Init checks the statics before the constants, in enum order: the slab 8-aligned, 16 to 65536 bytes, a multiple of 8, words 0 and 1 unmarked; the table 8-aligned, at most 65536 entries, `const_size` covering the entries. `objects_space_register` now accepts only `OBJECT_SPACE_NATIVE` |
 | Coding OH-5 (2026-09-28) | `array_create` rejects `count` above 65535, and a `count × elem_size` that cannot fit, before multiplying. `array_copy` sends each id of a reference array through `objects_write_ref`, in overlap-safe order; other elements move by `memmove`, struct ids included (item 3 below). An out-of-range `array_element_byref` has `id` `OBJECT_NULL`. `value_unbox` requires a live box of exactly the size asked. `objects_clone` keeps `OBJECT_H_ASCII` |
+| Instances (I1–I6, 2026-09-28) | The owner's model: one application is one thread, and several applications are several threads that share nothing. **All library state moved into `obj_handler_t`**, one per application, which every call takes first and every host callback receives; A2 now holds per instance. Ids never leave their instance; locks for shared peripherals live in the native and board layer. Built before OH-3 and OH-4 — §1, §7.5, §8, §9 |
 
 **Still open:**
 
