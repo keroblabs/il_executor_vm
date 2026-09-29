@@ -27,9 +27,10 @@ has no `#include` of any VM header. That boundary was worth having and is
 worth strengthening.
 
 **Rule: ObjectHandler contains no CIL, no ECMA-335, and no `.vxb`
-knowledge.** It manipulates opaque *type ids* and opaque *reference bitmaps*
-handed to it by the embedder. `cli_exec` is one embedder; Ruffus VM could be
-another; a future project could be a third.
+knowledge** beyond the primitive values a stack slot holds (§6.7). It
+manipulates opaque *type ids* and opaque *reference bitmaps* handed to it by
+the embedder. `cli_exec` is one embedder; Ruffus VM could be another; a
+future project could be a third.
 
 Concretely this forbids, inside the library:
 
@@ -41,7 +42,10 @@ Concretely this forbids, inside the library:
 
 What the library *does* own, and what the embedder must therefore not
 duplicate: object identity, object lifetime, the layout of the heap, the
-layout of the execution stack, and the definition of a frame.
+layout of the execution stack, the definition of a frame, and how slot values
+compare and convert (§6.7). That last is mechanism: which comparison or
+conversion an opcode performs, and whether its operand types are valid under
+§III.1.5, is the interpreter's policy (B6).
 
 **Application, threads and the instance (A2, A14).** An application is one
 CLI binary, packed into one image, and it runs on one OS thread; its managed
@@ -794,9 +798,9 @@ could reach a peripheral as contiguous memory ([11 §8.4](11_Memory_Model.md)).
 
 **Element access.** One function returns the address of any element, whatever
 its type. CIL has a dozen `ldelem`/`stelem` forms plus structs of any size, and
-sign extension and promotion (§III.1.5) are the interpreter's rules, not the
-library's (§1) — so the library hands out an address and the interpreter does
-the typed load or store:
+which form an access is — so which promotion or narrowing it needs (§III.1.5)
+— is the interpreter's knowledge, not the library's (§1): the library hands
+out an address and the interpreter does the typed load or store:
 
 | CIL | Interpreter | ObjectHandler |
 |---|---|---|
@@ -899,6 +903,10 @@ typedef struct {
     } u;
 } stack_slot_t;                     /* 16 bytes, 8-byte aligned     */
 ```
+
+Both are declared in `objects_types.h`, not `stack.h`: `value.c` reads slots
+(§6.7) and is built before `stack.c`, as the array header is declared there
+for the collector (§5.7).
 
 Folding the byref offset into `aux` keeps the union at exactly 8 bytes. That
 is not a v1 saving — natural alignment pads the struct to 16 either way — but
@@ -1094,13 +1102,102 @@ with the high-water mark, which is the point of the arena.
 `ruffusvm/ObjectHandler/stack.h` and `value_type.c` are not ported, in any
 form. `stack_push_integer`, `value_create_decimal` and the whole
 `value_get_*` family exist only to make boxing bearable, and tier 0 removes
-the reason they exist. `value_compare()` is worth reading once for its
-mixed-type promotion table and then reimplementing against slots — which is
-why `value.c` keeps the name and loses the allocation.
+the reason they exist. `value_compare()` keeps its name and loses the
+allocation, but there are no rules to port with it: Ruffus refuses operands
+of different types and has no promotion table, so §6.7 writes the rules from
+ECMA-335 (B6).
 
 Also rejected: `instance_get_current()` inside every accessor. Ruffus reaches
 the stack through a hidden global on the hottest path in the VM; here the
 thread is a parameter (§8).
+
+### 6.7 Normalisation — comparing and converting slots (B6)
+
+Decided 2026-09-29. `value.c` compares any two slots and converts any
+numeric slot to any primitive type. That is mechanism, and the library owns
+it (§1); which comparison or conversion an opcode performs, and whether its
+operand types are valid under §III.1.5, is the interpreter's policy. Ruffus
+has no promotion table to port — its `value_compare` refuses operands of
+different types — so the rules are written here, from ECMA-335.
+
+```c
+enum { VALUE_LESS = -1, VALUE_EQUAL = 0, VALUE_GREATER = 1,
+       VALUE_UNORDERED = 2 };                   /* value_compare's result */
+enum { VALUE_UNSIGNED = 0x01,                   /* integers read unsigned */
+       VALUE_CHECKED  = 0x02 };                 /* value_convert: must fit */
+enum { VALUE_T_INT8 = 1, VALUE_T_UINT8, VALUE_T_INT16, VALUE_T_UINT16,
+       VALUE_T_INT32, VALUE_T_UINT32, VALUE_T_INT64, VALUE_T_UINT64,
+       VALUE_T_FLOAT32, VALUE_T_FLOAT64, VALUE_T_NATIVE_INT,
+       VALUE_T_NATIVE_UINT, VALUE_T_COUNT };    /* value_convert's targets */
+```
+
+**Comparison.** `value_compare(oh, a, b, flags)` normalises both operands to
+a common form and orders them:
+
+| Operands | Common form | Order |
+|---|---|---|
+| `I4`, `NINT`, `I8`, in any mix | 64 bits: sign-extended, or zero-extended from the operand's own width under `VALUE_UNSIGNED` | signed, or unsigned under `VALUE_UNSIGNED` |
+| an integer and an `R8` | the integer as `value_convert` to `VALUE_T_FLOAT64` makes it | IEEE: `-0.0` equals `+0.0`, and a NaN is `VALUE_UNORDERED` |
+| two `R8` | double | the same |
+| two `REF` | the id | `OBJECT_NULL` below every object |
+| two `BYREF` | the address each designates (§4) | unsigned; equal when both designate the same byte |
+| any other pair | none | `VALUE_UNORDERED` |
+
+So `I4 5` equals `NINT 5`: the kinds stay distinct (§6.1), and their values
+compare, as §III.1.5 has it. An integer meets a double through the
+conversion `conv.r8` performs, so it loses precision above 2^53, as C# does.
+A byref never equals a number: no byref is null (§4), and no host pointer
+enters a `native int` ([15 §11](15_Pack_Time_IL_Transforms.md)). `EMPTY` or
+an unknown kind goes to `on_corrupt` and compares `VALUE_UNORDERED`. The
+interpreter maps each opcode onto the result, passing `VALUE_UNSIGNED` for
+the `.un` forms:
+
+| Opcode | True when the result is |
+|---|---|
+| `ceq`, `beq` | `EQUAL` |
+| `bne.un` | not `EQUAL` |
+| `cgt`, `bgt` / `clt`, `blt` | `GREATER` / `LESS` |
+| `cgt.un`, `bgt.un` / `clt.un`, `blt.un` | `GREATER` or `UNORDERED` / `LESS` or `UNORDERED` |
+| `bge`, `ble` | `GREATER` or `EQUAL` / `LESS` or `EQUAL` |
+| `bge.un`, `ble.un` | not `LESS` / not `GREATER` |
+
+`cgt.un x, null` is then the null test ECMA-335 intends, since null is below
+every object.
+
+**Conversion.** `value_convert(oh, src, to, flags, dst)` converts an `I4`,
+`I8`, `NINT` or `R8` to one of the twelve targets, and leaves the result in
+the target's stack kind:
+
+| Target | Result |
+|---|---|
+| `INT8`, `UINT8`, `INT16`, `UINT16`, `INT32`, `UINT32` | `I4`, extended by the target's signedness |
+| `INT64`, `UINT64` | `I8` |
+| `NATIVE_INT`, `NATIVE_UINT` | `NINT`, 32 bits ([15 §11](15_Pack_Time_IL_Transforms.md)) |
+| `FLOAT32`, `FLOAT64` | `R8`; `FLOAT32` rounded to float precision |
+
+- An integer source is read as a comparison reads it: sign-extended, or
+  zero-extended from its own width when `VALUE_UNSIGNED` is set or an
+  unchecked conversion goes to an unsigned target — Table III.8 zero-extends
+  an `int32` converted to `unsigned int64`. The target keeps the low bits,
+  extended by its own signedness. Converted to a float, an integer is rounded
+  once, straight to the target precision.
+- A float source is truncated toward zero. Unchecked, a value outside the
+  target's range saturates at its bounds and a NaN becomes 0. ECMA-335 leaves
+  that result unspecified and C leaves it undefined; saturation is what
+  CoreCLR does since .NET 9, and for 8- and 16-bit targets since .NET 11. A
+  double beyond float's range becomes an infinity. `VALUE_UNSIGNED` has no
+  effect on a float source.
+- `VALUE_CHECKED`: a value that does not fit the target, or a NaN, returns 0
+  and leaves `dst` untouched, and the interpreter throws
+  `OverflowException`. A float target always fits.
+- `src` and `dst` may be the same slot. A `REF`, `BYREF` or `EMPTY` source,
+  or an unknown target, goes to `on_corrupt` and returns 0: a reference has
+  no integer form here, since a `native int` is 32 bits and no host pointer
+  may enter one.
+
+The interpreter's map: `conv.X` passes no flag, `conv.ovf.X`
+`VALUE_CHECKED`, and `conv.ovf.X.un` `VALUE_CHECKED | VALUE_UNSIGNED`;
+`conv.r.un` is `VALUE_T_FLOAT64` with `VALUE_UNSIGNED`.
 
 ---
 
@@ -1312,7 +1409,9 @@ int32_t     obj_string_char_at(obj_handler_t * oh, object_id_t id,
 object_id_t value_box(obj_handler_t * oh, uint16_t type, const void * src, uint32_t bytes);
 void        value_unbox(obj_handler_t * oh, object_id_t id, void * dst, uint32_t bytes);
 int32_t     value_compare(obj_handler_t * oh, const stack_slot_t * a,
-                          const stack_slot_t * b);
+                          const stack_slot_t * b, uint32_t flags);        /* §6.7 */
+int         value_convert(obj_handler_t * oh, const stack_slot_t * src, uint8_t to,
+                          uint32_t flags, stack_slot_t * dst);  /* 0: not converted */
 
 /* ---- gc.h : the collector ------------------------------------------- */
 void     gc_collect(obj_handler_t * oh);
@@ -1518,6 +1617,7 @@ The limits behind the codes:
 | Coding D7 (2026-09-28) | Every reader goes through one library-internal view, `objects_info`, which answers from a heap handle or a constant entry alike. A constant id with a non-zero generation is refused in debug. Init checks the statics before the constants, in enum order: the slab 8-aligned, 16 to 65536 bytes, a multiple of 8, words 0 and 1 unmarked; the table 8-aligned, at most 65536 entries, `const_size` covering the entries. `objects_space_register` now accepts only `OBJECT_SPACE_NATIVE` |
 | Coding OH-5 (2026-09-28) | `array_create` rejects `count` above 65535, and a `count × elem_size` that cannot fit, before multiplying. `array_copy` sends each id of a reference array through `objects_write_ref`, in overlap-safe order; other elements move by `memmove`, struct ids included (item 3 below). An out-of-range `array_element_byref` has `id` `OBJECT_NULL`. `value_unbox` requires a live box of exactly the size asked. `objects_clone` keeps `OBJECT_H_ASCII` |
 | Application and instance (A14, 2026-09-28) | The owner's model: an application is one CLI binary, packed into one image and run on one OS thread; its managed threads are green threads the VM schedules; running several applications at once is not a use case. **All library state is in `obj_handler_t`**, which every call takes first and every host callback receives, so the library keeps no hidden globals (§8). Built before OH-3 and OH-4 — §1, §7.5, §8, §9 |
+| Value normalisation (B6, 2026-09-29) | **The library normalises; the interpreter chooses.** `value_compare` orders any two slots and `value_convert` converts any number to any primitive type; which one an opcode needs, and whether its operands are valid under §III.1.5, is the interpreter's. Integers compare in 64 bits, signed or unsigned; an integer meets a double through the conversion; references compare by id, byrefs by address, any other mix is `VALUE_UNORDERED`. Conversions follow Table III.8, and a float out of range saturates, NaN to 0. `stack_slot_t` is declared in `objects_types.h` — §1, §6.1, §6.7 |
 
 **Still open:**
 

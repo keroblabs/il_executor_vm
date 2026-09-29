@@ -93,9 +93,10 @@ Decided. Changing one means changing the contract first.
   ([14 §6.0](14_ObjectHandler.md)).
 - No raw pointer survives a safepoint: resolve once per opcode
   ([14 §2.1.1](14_ObjectHandler.md), [11 §4.3](11_Memory_Model.md)).
-- ObjectHandler contains no CIL, ECMA-335 or `.vxb` knowledge, calls neither
-  `malloc` nor `printf`, and its headers compile against `<stdint.h>` and
-  `<string.h>` only ([14 §1](14_ObjectHandler.md)).
+- ObjectHandler contains no CIL, ECMA-335 or `.vxb` knowledge beyond the
+  primitive values a stack slot holds (14 §6.7), calls neither `malloc` nor
+  `printf`, and its headers compile against `<stdint.h>` and `<string.h>`
+  only ([14 §1](14_ObjectHandler.md)).
 - `on_no_memory` never returns ([18 D1](18_ObjectHandler_Build_Plan.md)).
 - ObjectHandler keeps no mutable globals: its state is the `obj_handler_t`
   every call takes ([14 §1](14_ObjectHandler.md)).
@@ -339,10 +340,14 @@ These either land in the first commit's headers or block OH-1.
 - [ ] **B5 — Docs 00, 13, 15 and 17**: check them for the same stale points
   as B1 (strings open, tier 2 shipping). Doc 00 still says `ldstr` takes a
   literal-pool index; since D7 it is a constant index (14 §3.5).
-- [ ] **B6 — 14 §6.6 and 18 OH-5** tell `value.c` to reimplement Ruffus's
+- [x] **B6 — 14 §6.6 and 18 OH-5** told `value.c` to reimplement Ruffus's
   "mixed-type promotion table" for `value_compare`. Ruffus has none: its
-  `value_compare` rejects operands of different types. The rules have to come
-  from ECMA-335 Partition III §1.5 instead; settle them with OH-5.
+  `value_compare` rejects operands of different types. *Decided
+  2026-09-29:* the library normalises — `value_compare` orders any two
+  slots, `value_convert` converts any number to any primitive type — and the
+  interpreter chooses the operation and checks §III.1.5 validity; `I4 5`
+  equals `NINT 5`. *Recorded in:* 14 §§1, 5.7, 6.1, 6.6, 6.7, 8 and 11;
+  18 §§0.1, 6, 7 and 12.
 
 ### C. Build and code chores
 
@@ -398,10 +403,10 @@ These either land in the first commit's headers or block OH-1.
   thread stacks: no IL runs without them, and they are the collector's roots.
 - [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
   (18 §7), built before OH-3 and OH-4 (`92ff6ea`). D9 decided (14 §5.6);
-  `obj_string_intern` came with D7 (`e06439e`). Still open, each waiting for
-  its slice: `value_compare` (OH-4, B6) and the tracing test (OH-3).
-  `String.Split` stays
-  out of `obj_string.c`: it needs the embedder's `string[]` type id (C6).
+  `obj_string_intern` came with D7 (`e06439e`). Still open: `value_compare`
+  and `value_convert`, decided with B6 (14 §6.7), and the tracing test
+  (OH-3). `String.Split` stays out of `obj_string.c`: it needs the
+  embedder's `string[]` type id (C6).
 - [ ] **OH-6** — hardening: sanitizers, coverage, 32-bit `-Os` build,
   statistics dump (18 §8).
 

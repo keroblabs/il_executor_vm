@@ -45,7 +45,7 @@ is what makes every item below testable without the rest of the system.
 | ~~OH-2~~ | ~~Allocator: `heap.c`, free list, `heap_release`, `heap_verify`, stats~~ | **P2** | L | OH-1 | done — `1fe5476` |
 | OH-3 | Collector: `gc.c`, roots, scopes, triggers | **P3** | L | OH-2, D5–D7 | §5 tests |
 | OH-4 | Stack: threads, slots, frames | **P4** | M | OH-3 | §6 tests |
-| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9; interning with D7, `value_compare` with OH-4 | §7 tests — built in `92ff6ea` and `e06439e` except the two pieces of §7 |
+| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9, B6; interning with D7, the tracing test with OH-3 | §7 tests — built in `92ff6ea` and `e06439e` except the two pieces of §7 |
 | OH-6 | Hardening: sanitizers, coverage, 32-bit release build, stats dump | **P6** | M | OH-2 onward | §8 tests |
 
 D5, D6, D7 and D9 are decisions too, but they are **not** P0: each is consumed
@@ -580,8 +580,10 @@ failure is ours, in a test, rather than Ruffus's, in six months.
 - a byref slot keeps its base object alive.
 
 **Risk:** conflating `STACK_K_NINT` and `STACK_K_I4`. They are distinct kinds
-even though both are 32-bit (14 §6.1) — one test asserts they do not compare
-equal through `value_compare` in OH-5.
+even though both are 32-bit (14 §6.1), and a conversion keeps them apart:
+`value_convert` to `VALUE_T_NATIVE_INT` yields `NINT`. Their values are not
+kept apart — `value_compare` finds `I4 5` equal to `NINT 5`, as §III.1.5
+does (14 §6.7) — and OH-5 tests both.
 
 ---
 
@@ -589,14 +591,15 @@ equal through `value_compare` in OH-5.
 
 **Files:** `array.c/.h`, `obj_string.c/.h`, `value.c/.h`.
 
-**Consumes:** the allocator (OH-2) and D9, decided 2026-09-28 in 14 §5.6.
-The array layout is **decided** in 14 §5.7.
+**Consumes:** the allocator (OH-2); D9, decided 2026-09-28 in 14 §5.6; and
+B6, decided 2026-09-29 in 14 §6.7. The array layout is **decided** in 14 §5.7.
 
 **Order (2026-09-28): built before OH-3 and OH-4**, at the owner's request.
-Two pieces wait for the slice they depend on: `value_compare` for
-`stack_slot_t` and B6's rules (OH-4), and the test that the collector traces
-an `array_create` array (OH-3). `obj_string_intern` waited for D7 and came
-with it (`e06439e`).
+One piece waits for the slice it depends on: the test that the collector
+traces an `array_create` array (OH-3). `obj_string_intern` waited for D7 and
+came with it (`e06439e`). `value_compare` waited for `stack_slot_t` and B6's
+rules, and B6 settled both: the slot type is declared in `objects_types.h`,
+and the rules are 14 §6.7.
 
 **Work:**
 
@@ -622,8 +625,8 @@ with it (`e06439e`).
    and surrogates; `obj_string_intern` returns a constant's id (D7, 14 §3.5).
    `obj_string_length` and `obj_string_char_at` count UTF-16 units (D9).
 3. `value.c` — `value_box`/`value_unbox` with a size check; `value_compare`
-   over slots, reimplementing Ruffus's mixed-type promotion table with no
-   allocation (14 §6.6).
+   and `value_convert` over slots, per 14 §6.7, with no allocation. Ruffus
+   has no promotion table to reimplement (14 §6.6).
 
 **Done when:** range tests, including index `0xFFFFFFFF`, a wrapping
 `index + count` and a `count × elem_size` overflow at creation; zero-length
@@ -635,7 +638,9 @@ clear; **an `int64[]` and a `double[]` round-trip with an alignment assertion
 on every element address**; a UTF-8 validation table (valid / overlong /
 truncated / surrogate / empty) with an expected verdict per row; box→unbox
 round-trip for every primitive kind; a `value_compare` matrix over every
-slot-kind pair.
+slot-kind pair, signed and unsigned, with `I4 5` equal to `NINT 5`; a
+`value_convert` table over every target, checked and unchecked, at each
+range bound, with NaN and the infinities.
 
 **Built (2026-09-28, `92ff6ea`; interning `e06439e`):** everything above
 except the tracing test (OH-3) and the `value_compare` matrix (OH-4). Two
@@ -733,6 +738,7 @@ and OH-4, not deferred.
 | Coding D7 (2026-09-28) | Built in `e06439e`, with `test_spaces.c`: 16 cases, among them one per malformed statics slab and one per malformed constant entry, and a fake embedder that lays out constant tables the way `cli_pack` will. Three mutants — no refmap check, no upper bound on constant indices, writes into constants allowed — were each caught |
 | Coding OH-5 (2026-09-28) | The element-refmap check in `array_create` sits under `OBJECT_DEBUG_REFS`. Reference arrays copy through the barrier element by element; everything else by `memmove`. Boxing tests live in `test_value.c`, which the §2.4 tree gains |
 | Instances (A14, 2026-09-28) | At the owner's request, before OH-3 and OH-4: every global moved into `obj_handler_t`, which every call takes first and every callback receives — 14 §1, §8. `objects_shutdown` and `obj_string_init` are gone, since shutdown zeroes the instance. `test_instances.c` runs two instances side by side, among them a seeded interleaving where one runs out of memory beside the other; a heap pointer kept inside `heap.c` fails three of its four cases. The same day the owner fixed the model: one application, one OS thread, several at once not a use case — the tests guard the no-globals rule, not a second application |
+| Value normalisation (B6, 2026-09-29) | At the owner's request the library normalises: `value_compare` orders any two slots and `value_convert` converts any number to any primitive type, and the interpreter chooses which and checks validity — 14 §1, §6.7. `stack_slot_t` is declared in `objects_types.h` now, so `value_compare` no longer waits for OH-4, and §6's test is inverted: `I4 5` equals `NINT 5`. A float out of range saturates, NaN to 0, as CoreCLR's does |
 
 **Nothing remains open before OH-3:** A1–A13 are settled
 ([19 §4](19_Session_Checklist.md)). D5, D6, D7 and D9 (§9) are scheduled decisions, not
