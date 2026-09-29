@@ -9,6 +9,7 @@ add_library(object_handler STATIC
     objects.c
     heap.c
     gc.c
+    stack.c
     array.c
     obj_string.c
     value.c

@@ -11,3 +11,8 @@ void gc_request(obj_handler_t * oh)
 {
     oh->gc_requested = 1;
 }
+
+void gc_register_root_scan(obj_handler_t * oh, gc_scan_fn scan)
+{
+    oh->root_scan = scan;
+}

@@ -159,6 +159,11 @@ typedef struct {
 /* ---- the application's instance (doc 14 section 1) ------------------ */
 
 typedef struct obj_handler obj_handler_t;
+struct stack_thread_t;
+
+/* The seam between the stacks and the collector (doc 14 section 7.4, A7). */
+typedef void (*gc_visit_fn)(obj_handler_t * oh, object_id_t id);
+typedef void (*gc_scan_fn)(obj_handler_t * oh, gc_visit_fn visit);
 
 /* All three required (doc 14 section 7.5); each receives the instance that calls it. */
 typedef struct {
@@ -198,6 +203,8 @@ struct obj_handler {
     const uint8_t        * const_base;
     const object_const_t * consts;
     obj_handler_host_t     host;
+    struct stack_thread_t * threads;    /* every managed thread's stack, owned by stack.c */
+    gc_scan_fn             root_scan;   /* registered by stack.c */
     uint16_t               string_type;
     uint8_t                gc_requested;
     uint8_t                ready;

@@ -5,6 +5,7 @@
 #include "objects.h"
 #include "heap.h"
 #include "gc.h"
+#include "stack.h"
 #include "array.h"
 #include "obj_string.h"
 #include "value.h"
@@ -48,8 +49,6 @@ typedef struct {
     uint32_t        const_size;     /* table and payloads, in bytes */
 
     uint16_t        string_type;    /* the embedder's type id for strings (D9) */
-
-    uint8_t       * stack_mem;      uint32_t stack_size;
 
     uint16_t        worklist_len;   uint16_t * worklist;
 } obj_handler_config_t;

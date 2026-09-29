@@ -117,6 +117,51 @@ TEST_CASE(shutdown_of_one_leaves_the_other)
     CHECK(heap_verify(&fake_oh));
 }
 
+static obj_handler_t * visited_oh[4];
+static object_id_t     visited_id[4];
+static uint32_t        visited;
+
+static void visit(obj_handler_t * oh, object_id_t id)
+{
+    CHECK(visited < 4);
+    visited_oh[visited] = oh;
+    visited_id[visited++] = id;
+}
+
+TEST_CASE(threads_belong_to_their_instance)
+{
+    static stack_slot_t a_slots[4];
+    static stack_slot_t b_slots[4];
+    stack_thread_t a;
+    stack_thread_t b;
+    object_id_t in_a;
+    object_id_t in_b;
+
+    memset(&a, 0, sizeof a);
+    memset(&b, 0, sizeof b);
+    fake_init(PAYLOAD, HANDLES);
+    b_init();
+    CHECK(stack_thread_init(&fake_oh, &a, a_slots, 4, NULL, 0));
+    CHECK(stack_thread_init(&b_oh, &b, b_slots, 4, NULL, 0));
+    CHECK(fake_oh.threads == &a && b_oh.threads == &b && a.next == NULL && b.next == NULL);
+    in_a = objects_create(&fake_oh, FAKE_T_DATA, 8);
+    in_b = objects_create(&b_oh, FAKE_T_DATA, 8);
+    stack_push_ref(&a, in_a);
+    stack_push_ref(&b, in_b);
+
+    b_oh.root_scan(&b_oh, visit);
+    CHECK_EQ(visited, 1);
+    CHECK(visited_oh[0] == &b_oh && visited_id[0] == in_b);
+    fake_oh.root_scan(&fake_oh, visit);
+    CHECK_EQ(visited, 2);
+    CHECK(visited_oh[1] == &fake_oh && visited_id[1] == in_a);
+
+    stack_thread_end(&b);
+    CHECK(b_oh.threads == NULL && fake_oh.threads == &a);
+    CHECK(stack_verify(&fake_oh) && stack_verify(&b_oh));
+    CHECK_EQ(fake_corrupt_count, 0);
+}
+
 /* ---- two instances, interleaved one operation at a time ------------- */
 
 #define MIX_OPS     20000u
@@ -229,6 +274,7 @@ static const harness_case_t cases[] = {
     HARNESS_CASE(instances_share_nothing),
     HARNESS_CASE(callbacks_receive_their_instance),
     HARNESS_CASE(shutdown_of_one_leaves_the_other),
+    HARNESS_CASE(threads_belong_to_their_instance),
     HARNESS_CASE(interleaved_instances_stay_consistent),
 };
 
