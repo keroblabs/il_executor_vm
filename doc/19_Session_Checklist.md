@@ -81,7 +81,7 @@ Decided. Changing one means changing the contract first.
 | Stack | typed slots and overlapped frames in v1; frame scratch and the size-class recycler deferred | 14 §6.0 |
 | Collector | tricolour mark-sweep, precise, non-moving in v1; a 75 % threshold sets a flag, and a failed allocation collects at once | 14 §7 |
 | Init failures | `obj_handler_status_t`, from `obj_handler_init` only; after init, embedder bugs go to `on_corrupt`, which always returns | 14 §9.2 |
-| Allocation failure | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, `on_oom` | 14 §5.2 |
+| Allocation failure | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, `on_no_memory` | 14 §5.2 |
 | Pins | a count, 0–7, in the handle's flags | 14 §3.2 |
 | Compiler baseline | C99, also built as C11; `-Wall -Wextra -Werror -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes` | 14 §1.1 |
 
@@ -96,7 +96,7 @@ Decided. Changing one means changing the contract first.
 - ObjectHandler contains no CIL, ECMA-335 or `.vxb` knowledge, calls neither
   `malloc` nor `printf`, and its headers compile against `<stdint.h>` and
   `<string.h>` only ([14 §1](14_ObjectHandler.md)).
-- `on_oom` never returns ([18 D1](18_ObjectHandler_Build_Plan.md)).
+- `on_no_memory` never returns ([18 D1](18_ObjectHandler_Build_Plan.md)).
 - ObjectHandler keeps no mutable globals: its state is the `obj_handler_t`
   every call takes ([14 §1](14_ObjectHandler.md)).
 - Nothing is copied from `ruffusvm/RuffusVM/RuffusVMTool/`, which is
@@ -291,7 +291,7 @@ These either land in the first commit's headers or block OH-1.
   `heap_alloc` and `heap_release` exist. *Recorded in:* 18 §3, §4.
 - [x] **A10 — What `heap_alloc` does when memory runs out.** *Decided:*
   `OBJECT_NULL` only for a request that can never fit; otherwise collect,
-  retry once, then `on_oom`. *Recorded in:* 14 §5.2, 18 D1.
+  retry once, then `on_no_memory`. *Recorded in:* 14 §5.2, 18 D1.
 - [x] **A11 — Id alignment in every payload.** *Decided:* every
   `object_id_t` in any payload is 4-byte aligned, an embedder layout rule.
   *Recorded in:* 14 §7.5, 11 §9.
@@ -381,7 +381,7 @@ These either land in the first commit's headers or block OH-1.
 - [ ] **OH-T** — test system (18 §2). Done: `harness.h` and CTest (L1), the
   fake embedder (L2), one process per case and a dump on failure (L7). In
   part: `heap_verify` (L3 — `gc_verify` and `stack_verify` come with their
-  slices), fault injection for `on_oom` and corruption (L5), seeded tortures
+  slices), fault injection for `on_no_memory` and corruption (L5), seeded tortures
   that report seed and operation (L6). Still to do: the oracle (L4, with
   OH-3), the operation log and `regressions/` (L6), and CI (L8, OH-6).
 - [x] **OH-1** — foundation: types, configuration, spaces, resolution,

@@ -5,15 +5,15 @@
 obj_handler_config_t fake_cfg;
 obj_handler_t        fake_oh;
 
-jmp_buf         fake_oom_jmp;
-int             fake_oom_armed;
-unsigned        fake_oom_count;
+jmp_buf         fake_no_memory_jmp;
+int             fake_no_memory_armed;
+unsigned        fake_no_memory_count;
 
 unsigned        fake_corrupt_count;
 const char *    fake_corrupt_where;
 object_id_t     fake_corrupt_id;
 
-obj_handler_t * fake_oom_oh;
+obj_handler_t * fake_no_memory_oh;
 obj_handler_t * fake_corrupt_oh;
 obj_handler_t * fake_refmap_oh;
 
@@ -52,15 +52,15 @@ static const uint8_t * fake_type_refmap(obj_handler_t * oh, uint16_t type, uint3
     }
 }
 
-static void fake_on_oom(obj_handler_t * oh)
+static void fake_on_no_memory(obj_handler_t * oh)
 {
-    fake_oom_count++;
-    fake_oom_oh = oh;
-    if (fake_oom_armed) {
-        fake_oom_armed = 0;
-        longjmp(fake_oom_jmp, 1);
+    fake_no_memory_count++;
+    fake_no_memory_oh = oh;
+    if (fake_no_memory_armed) {
+        fake_no_memory_armed = 0;
+        longjmp(fake_no_memory_jmp, 1);
     }
-    harness_fail(__FILE__, __LINE__, "unexpected on_oom");
+    harness_fail(__FILE__, __LINE__, "unexpected on_no_memory");
 }
 
 static void fake_on_corrupt(obj_handler_t * oh, const char * where, object_id_t id)
@@ -75,7 +75,7 @@ static void fake_on_corrupt(obj_handler_t * oh, const char * where, object_id_t 
     }
 }
 
-obj_handler_host_t fake_host = { fake_type_refmap, fake_on_oom, fake_on_corrupt };
+obj_handler_host_t fake_host = { fake_type_refmap, fake_on_no_memory, fake_on_corrupt };
 
 void fake_dump(void)
 {

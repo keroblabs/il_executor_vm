@@ -24,16 +24,16 @@ extern obj_handler_config_t fake_cfg;
 extern obj_handler_host_t   fake_host;
 extern obj_handler_t        fake_oh;        /* the instance fake_start initialises */
 
-extern jmp_buf         fake_oom_jmp;
-extern int             fake_oom_armed;
-extern unsigned        fake_oom_count;
+extern jmp_buf         fake_no_memory_jmp;
+extern int             fake_no_memory_armed;
+extern unsigned        fake_no_memory_count;
 
 extern unsigned        fake_corrupt_count;
 extern const char *    fake_corrupt_where;
 extern object_id_t     fake_corrupt_id;
 
 /* The instance that made the last call to each callback. */
-extern obj_handler_t * fake_oom_oh;
+extern obj_handler_t * fake_no_memory_oh;
 extern obj_handler_t * fake_corrupt_oh;
 extern obj_handler_t * fake_refmap_oh;
 
@@ -57,14 +57,14 @@ void              fake_consts_install(void);  /* into fake_cfg, after fake_confi
 object_const_t  * fake_const_entry(uint16_t index);
 uint8_t         * fake_const_bytes(void);
 
-/* Requires stmt to end in on_oom. Locals that stmt writes are indeterminate afterwards. */
-#define FAKE_EXPECT_OOM(stmt) \
+/* Requires stmt to end in on_no_memory. Locals that stmt writes are indeterminate afterwards. */
+#define FAKE_EXPECT_NO_MEMORY(stmt) \
     do { \
-        fake_oom_armed = 1; \
-        if (setjmp(fake_oom_jmp) == 0) { \
+        fake_no_memory_armed = 1; \
+        if (setjmp(fake_no_memory_jmp) == 0) { \
             stmt; \
-            fake_oom_armed = 0; \
-            harness_fail(__FILE__, __LINE__, "expected on_oom: " #stmt); \
+            fake_no_memory_armed = 0; \
+            harness_fail(__FILE__, __LINE__, "expected on_no_memory: " #stmt); \
         } \
     } while (0)
 

@@ -567,11 +567,11 @@ oversized request fails cleanly at step 1 instead of truncating.
    compaction, not a layer under it). v1 falls through to step 3.
 3. Free list — first fit, address-ordered.
 4. Bump the segment top.
-5. On failure: collect, retry once; then try the next segment; then `on_oom`,
-   which does not return.
+5. On failure: collect, retry once; then try the next segment; then
+   `on_no_memory`, which does not return.
 6. Take a handle from the handle free list; on exhaustion, collect, retry
-   once, then `on_oom`. The handle is secured before the payload is carved,
-   so an `on_oom` that `longjmp`s never strands a block.
+   once, then `on_no_memory`. The handle is secured before the payload is
+   carved, so an `on_no_memory` that `longjmp`s never strands a block.
 7. **Zero the payload.** Required by the CLI and by the collector — an
    unzeroed object-id field would be marked as a garbage handle index.
 
@@ -1211,7 +1211,8 @@ typedef struct {
        For an array type, the bitmap of one element (§5.7).           */
     const uint8_t * (*type_refmap)(obj_handler_t * oh, uint16_t type, uint32_t * words);
 
-    void (*on_oom)(obj_handler_t * oh);
+    void (*on_no_memory)(obj_handler_t * oh);   /* still no room after a collection;
+                                                   must not return — §5.2 */
     void (*on_corrupt)(obj_handler_t * oh, const char * where, object_id_t id);
 } obj_handler_host_t;
 ```
@@ -1416,7 +1417,7 @@ the field is debug-only.
 `obj_handler_init` is the only function that returns a status. Every other
 failure follows [18 D1](18_ObjectHandler_Build_Plan.md): allocation returns
 `OBJECT_NULL` only for a request that can never fit, and `obj_string_create`
-also for bytes that are not valid UTF-8 (§5.6); `on_oom` does not return;
+also for bytes that are not valid UTF-8 (§5.6); `on_no_memory` does not return;
 and an embedder bug goes to `on_corrupt` — after which the library
 returns a safe value and carries on, in every build. Aborting is the
 embedder's choice, made inside `on_corrupt` (A13). Init is the exception
@@ -1437,7 +1438,7 @@ typedef enum {
     OBJ_HANDLER_E_PAYLOAD_SIZE,   /* < 16, > HEAP_MAX_PAYLOAD, or not a multiple of 8 */
     OBJ_HANDLER_E_HANDLES,        /* handles NULL, or handle_count < 2 or > 65536 */
     OBJ_HANDLER_E_WORKLIST,       /* worklist NULL or worklist_len == 0           */
-    OBJ_HANDLER_E_HOST_CALLBACK,  /* type_refmap, on_oom or on_corrupt is NULL    */
+    OBJ_HANDLER_E_HOST_CALLBACK,  /* type_refmap, on_no_memory or on_corrupt is NULL */
     OBJ_HANDLER_E_STATICS,        /* statics malformed, or its refmap marks bytes 0-7 — §3.5 */
     OBJ_HANDLER_E_CONST,          /* the constant table or one of its entries — §3.5 */
 } obj_handler_status_t;
@@ -1494,7 +1495,7 @@ The limits behind the codes:
 
 | Was open | Now |
 |---|---|
-| Library naming | Prefix is the owning module; `oh_`/`vee_` retired — §1.2. The string module is `obj_string`, because `strings.h` would shadow the POSIX header — §1.1 |
+| Library naming | Prefix is the owning module; `oh_`/`vee_` retired — §1.2. The string module is `obj_string`, because `strings.h` would shadow the POSIX header — §1.1. The out-of-memory callback is `on_no_memory`, not `on_oom` (2026-09-29) — §7.5 |
 | 64 KB heap, id width | **An initial profile, not a contract.** Heap ids are already pure identities, so compaction and a wider heap are changes to `heap.c`/`objects_types.h` that no embedder sees — §2.3.1 |
 | Allocation API width | Every byte and element count is **32-bit** from the first commit, so lifting the cap is not an API break — §5.2, §8 |
 | Segment selection policy | **One collectable segment**, MCU and host alike; two candidate splits recorded — §5.5 |

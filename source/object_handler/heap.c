@@ -232,11 +232,11 @@ object_id_t heap_alloc(obj_handler_t * oh, uint16_t space, uint16_t type, uint8_
         || (s->handle_collect_at != 0 && s->handles_used + 1u > s->handle_collect_at))
         gc_request(oh);
 
-    /* The handle is secured first, so an on_oom that longjmps strands no block. */
+    /* The handle is secured first, so an on_no_memory that longjmps strands no block. */
     if (s->handle_free_head == 0) {
         gc_collect(oh);
         if (s->handle_free_head == 0) {
-            oh->host.on_oom(oh);
+            oh->host.on_no_memory(oh);
             return OBJECT_NULL;
         }
     }
@@ -246,7 +246,7 @@ object_id_t heap_alloc(obj_handler_t * oh, uint16_t space, uint16_t type, uint8_
             gc_collect(oh);
             off = heap_carve(s, need);
             if (off == 0) {
-                oh->host.on_oom(oh);
+                oh->host.on_no_memory(oh);
                 return OBJECT_NULL;
             }
         }

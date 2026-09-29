@@ -98,7 +98,7 @@ TEST_CASE(box_that_can_never_fit_returns_null)
 
     fake_init(PAYLOAD, HANDLES);
     CHECK(value_box(&fake_oh, FAKE_T_DATA, big, PAYLOAD) == OBJECT_NULL);
-    CHECK_EQ(fake_oom_count, 0);
+    CHECK_EQ(fake_no_memory_count, 0);
 }
 
 TEST_CASE(unbox_misuse_is_corrupt)

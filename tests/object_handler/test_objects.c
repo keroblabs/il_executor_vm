@@ -162,7 +162,7 @@ TEST_CASE(init_host_callback)
     host.type_refmap = NULL;
     CHECK_EQ(obj_handler_init(&fake_oh, &fake_cfg, &host), OBJ_HANDLER_E_HOST_CALLBACK);
     host = fake_host;
-    host.on_oom = NULL;
+    host.on_no_memory = NULL;
     CHECK_EQ(obj_handler_init(&fake_oh, &fake_cfg, &host), OBJ_HANDLER_E_HOST_CALLBACK);
     host = fake_host;
     host.on_corrupt = NULL;
@@ -175,7 +175,7 @@ TEST_CASE(init_checks_in_enum_order)
 {
     obj_handler_host_t host = fake_host;
 
-    host.on_oom = NULL;
+    host.on_no_memory = NULL;
     fake_config(PAYLOAD, HANDLES);
     fake_cfg.segments = 0;
     fake_cfg.worklist = NULL;

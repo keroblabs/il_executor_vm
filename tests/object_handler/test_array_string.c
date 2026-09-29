@@ -111,7 +111,7 @@ TEST_CASE(array_create_rejects_what_never_fits)
     CHECK(array_create(&fake_oh, FAKE_T_DATA, 4, 0x40000001u) == OBJECT_NULL); /* 4 * count wraps */
     CHECK(array_create(&fake_oh, FAKE_T_DATA, 8, 0xFFFFFFFFu) == OBJECT_NULL);
     CHECK(array_create(&fake_oh, FAKE_T_DATA, 0xFFFF, 2) == OBJECT_NULL);
-    CHECK_EQ(fake_oom_count, 0);
+    CHECK_EQ(fake_no_memory_count, 0);
 
     /* The largest byte[] fills the payload exactly. */
     make_array(FAKE_T_DATA, 1, HEAP_MAX_PAYLOAD - HEAP_SENTINEL_BYTES - HEAP_GUARD_BYTES
@@ -364,7 +364,7 @@ TEST_CASE(string_utf8_validation_table)
         CHECK_EQ((handle_of(id)->flags & OBJECT_H_ASCII) != 0, all_ascii(r->bytes, r->len));
     }
     CHECK_EQ(fake_corrupt_count, 0);
-    CHECK_EQ(fake_oom_count, 0);
+    CHECK_EQ(fake_no_memory_count, 0);
 }
 
 TEST_CASE(string_char_at_counts_utf16_units)
@@ -421,7 +421,7 @@ TEST_CASE(string_that_can_never_fit_returns_null)
     s = obj_string_create(&fake_oh, big, sizeof big);
     CHECK(s != OBJECT_NULL);
     CHECK(obj_string_concat(&fake_oh, s, s) == OBJECT_NULL);  /* 80,000 bytes */
-    CHECK_EQ(fake_oom_count, 0);
+    CHECK_EQ(fake_no_memory_count, 0);
     CHECK_EQ(obj_string_length(&fake_oh, s), sizeof big);
 }
 

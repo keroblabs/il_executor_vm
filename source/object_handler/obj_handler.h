@@ -23,7 +23,7 @@ typedef enum {
     OBJ_HANDLER_E_PAYLOAD_SIZE,     /* < 16, > HEAP_MAX_PAYLOAD, or not a multiple of 8 */
     OBJ_HANDLER_E_HANDLES,          /* handles NULL, or handle_count < 2 or > 65536 */
     OBJ_HANDLER_E_WORKLIST,         /* worklist NULL or worklist_len == 0 */
-    OBJ_HANDLER_E_HOST_CALLBACK,    /* type_refmap, on_oom or on_corrupt is NULL */
+    OBJ_HANDLER_E_HOST_CALLBACK,    /* type_refmap, on_no_memory or on_corrupt is NULL */
     OBJ_HANDLER_E_STATICS,          /* statics malformed, or its refmap marks bytes 0-7 */
     OBJ_HANDLER_E_CONST             /* the constant table, or one of its entries */
 } obj_handler_status_t;

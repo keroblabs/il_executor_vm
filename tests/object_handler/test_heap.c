@@ -126,7 +126,7 @@ TEST_CASE(request_that_can_never_fit_returns_null)
           == OBJECT_NULL);
     CHECK(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_RAW, 0xFFFFFFFFu)
           == OBJECT_NULL);
-    CHECK_EQ(fake_oom_count, 0);
+    CHECK_EQ(fake_no_memory_count, 0);
 
     a = alloc_kind(FAKE_T_DATA, OBJECT_K_RAW, largest);
     CHECK_EQ(stats().free_bytes, 0);
@@ -296,9 +296,9 @@ TEST_CASE(hole_rejoins_the_top_with_its_upper_neighbour)
     verify();
 }
 
-/* ---- exhaustion ends in on_oom (A10) --------------------------------- */
+/* ---- exhaustion ends in on_no_memory (A10) -------------------------- */
 
-TEST_CASE(payload_exhaustion_ends_in_on_oom)
+TEST_CASE(payload_exhaustion_ends_in_on_no_memory)
 {
     object_id_t ids[64];
     heap_stats_t before;
@@ -308,8 +308,9 @@ TEST_CASE(payload_exhaustion_ends_in_on_oom)
     while (stats().free_bytes >= 256 + G)
         ids[n++] = alloc(256);
     before = stats();
-    FAKE_EXPECT_OOM(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_OBJECT, 256));
-    CHECK_EQ(fake_oom_count, 1);
+    FAKE_EXPECT_NO_MEMORY(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA,
+                                     OBJECT_K_OBJECT, 256));
+    CHECK_EQ(fake_no_memory_count, 1);
     CHECK_EQ(stats().live_objects, before.live_objects);
     CHECK_EQ(stats().free_handles, before.free_handles);
     verify();
@@ -320,15 +321,16 @@ TEST_CASE(payload_exhaustion_ends_in_on_oom)
     verify();
 }
 
-TEST_CASE(handle_exhaustion_ends_in_on_oom)
+TEST_CASE(handle_exhaustion_ends_in_on_no_memory)
 {
     uint32_t i;
 
     fake_init(PAYLOAD, 8);
     for (i = 0; i < 7; i++)
         alloc(8);
-    FAKE_EXPECT_OOM(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_OBJECT, 8));
-    CHECK_EQ(fake_oom_count, 1);
+    FAKE_EXPECT_NO_MEMORY(heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA,
+                                     OBJECT_K_OBJECT, 8));
+    CHECK_EQ(fake_no_memory_count, 1);
     CHECK_EQ(stats().used_bytes, 7 * (8 + G));  /* the failed request carved nothing */
     verify();
 }
@@ -598,13 +600,13 @@ static void torture_run(uint32_t seed)
     torture.live = 0;
     for (torture.op = 0; torture.op < TORTURE_OPS; torture.op++) {
         if (torture.live == 0 || (torture.live < TORTURE_LIVE && torture_rand() % 8 < 5)) {
-            fake_oom_armed = 1;
-            if (setjmp(fake_oom_jmp) == 0) {
+            fake_no_memory_armed = 1;
+            if (setjmp(fake_no_memory_jmp) == 0) {
                 uint32_t bytes = torture_rand() % 300;
                 object_id_t id = heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA,
                                             OBJECT_K_OBJECT, bytes);
 
-                fake_oom_armed = 0;
+                fake_no_memory_armed = 0;
                 CHECK(id != OBJECT_NULL);
                 torture.id[torture.live] = id;
                 torture.fill[torture.live] = (uint8_t)(torture_rand() | 1u);
@@ -629,9 +631,9 @@ static void torture_run(uint32_t seed)
     }
     CHECK(heap_verify(&fake_oh));
     st = stats();
-    printf("torture seed %lu: %lu allocations ended in on_oom\n",
-           (unsigned long)seed, (unsigned long)fake_oom_count);
-    CHECK(fake_oom_count > 0);                  /* the run did reach a full heap */
+    printf("torture seed %lu: %lu allocations ended in on_no_memory\n",
+           (unsigned long)seed, (unsigned long)fake_no_memory_count);
+    CHECK(fake_no_memory_count > 0);            /* the run did reach a full heap */
     CHECK_EQ(st.live_objects, 0);
     CHECK_EQ(st.used_bytes, 0);
     CHECK_EQ(st.free_blocks, 1);
@@ -662,8 +664,8 @@ static const harness_case_t cases[] = {
     HARNESS_CASE(split_leaves_the_remainder_free),
     HARNESS_CASE(release_at_the_top_lowers_it),
     HARNESS_CASE(hole_rejoins_the_top_with_its_upper_neighbour),
-    HARNESS_CASE(payload_exhaustion_ends_in_on_oom),
-    HARNESS_CASE(handle_exhaustion_ends_in_on_oom),
+    HARNESS_CASE(payload_exhaustion_ends_in_on_no_memory),
+    HARNESS_CASE(handle_exhaustion_ends_in_on_no_memory),
     HARNESS_CASE(stale_id_caught_in_debug_only),
     HARNESS_CASE(freed_handles_are_reused_last),
     HARNESS_CASE(release_misuse_is_corrupt),

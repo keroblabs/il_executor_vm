@@ -85,8 +85,8 @@ Every function had an unspecified failure path. Decision:
 
 | Case | Behaviour |
 |---|---|
-| Allocation cannot be satisfied | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, then `on_oom` — A10, 14 §5.2. `obj_string_create` also returns `OBJECT_NULL` for invalid UTF-8 (D9) |
-| `on_oom` | **must not return** — it aborts, `longjmp`s, or resets the board. The library has no way to continue and must not pretend it has |
+| Allocation cannot be satisfied | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, then `on_no_memory` — A10, 14 §5.2. `obj_string_create` also returns `OBJECT_NULL` for invalid UTF-8 (D9) |
+| `on_no_memory` | **must not return** — it aborts, `longjmp`s, or resets the board. The library has no way to continue and must not pretend it has |
 | `obj_handler_init` | returns `obj_handler_status_t` — one code per thing the embedder has to fix, listed in 14 §9.2 (not a bare `int`) |
 | Detected corruption | `on_corrupt(where, id)`, then return a safe value and keep going, in every build. Aborting is the embedder's choice inside `on_corrupt` (A13), which is what lets §2.1's recording fake run negative tests in a debug build |
 | Bad argument from the embedder (null id, out-of-range index) | `on_corrupt` — it is a bug in the embedder, not a run-time condition |
@@ -283,7 +283,7 @@ injection, the replay. A framework only prints the result.
 | L | Layer | What it is | Built in |
 |---|---|---|---|
 | 1 | Assertions, registration, reporting | **`harness.h` + CTest** — assertion macros carrying file, line and expression, a `{name, fn}` table, one OS process per test case. No vendored framework (§2.2) | OH-T |
-| 2 | Fake embedder | static type table (type id → refmap, instance size, element size), `on_oom` that `longjmp`s so exhaustion is assertable, `on_corrupt` that *records* so negative tests can run to completion | OH-T |
+| 2 | Fake embedder | static type table (type id → refmap, instance size, element size), `on_no_memory` that `longjmp`s so exhaustion is assertable, `on_corrupt` that *records* so negative tests can run to completion | OH-T |
 | 3 | **Invariant checkers** | `heap_verify()`, `gc_verify()`, `stack_verify()` — **library code under the debug switches, not test code** (§2.3) | OH-2, OH-3, OH-4 |
 | 4 | **Oracle / shadow model** | an independent object graph and reachability answer kept by the harness; after every collection the live set must equal it *exactly*, so a leak and a premature free both fail | OH-3 |
 | 5 | **Fault injection** | fail the *n*th allocation; exhaust handles with payload free and vice versa; force worklist overflow with a one-entry worklist; corrupt a handle deliberately and require `on_corrupt`; return NULL from `type_refmap`. Every failure path in the library is reachable only from here | OH-T, extended per slice |
@@ -480,7 +480,7 @@ every time the payload width changes and gives no second benefit.
 - split/coalesce unit tests cover: coalesce with previous only, next only,
   both, neither; exact fit; a remainder too small to split — which cannot
   occur, because sizes and the minimum block are both 8;
-- exhaustion: payload full and handles full each end in `on_oom` — the fake's
+- exhaustion: payload full and handles full each end in `on_no_memory` — the fake's
   `longjmp` — after the collect, a no-op until OH-3, and leave
   `heap_verify()` clean (A10);
 - a stale id (freed then reused handle) is caught in debug and is *not* caught

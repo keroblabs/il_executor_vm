@@ -92,7 +92,7 @@ obj_handler_status_t obj_handler_init(obj_handler_t * oh, const obj_handler_conf
             return OBJ_HANDLER_E_HANDLES;
     if (cfg->worklist == NULL || cfg->worklist_len == 0)
         return OBJ_HANDLER_E_WORKLIST;
-    if (host->type_refmap == NULL || host->on_oom == NULL || host->on_corrupt == NULL)
+    if (host->type_refmap == NULL || host->on_no_memory == NULL || host->on_corrupt == NULL)
         return OBJ_HANDLER_E_HOST_CALLBACK;
     if (!obj_handler_statics_ok(cfg))
         return OBJ_HANDLER_E_STATICS;

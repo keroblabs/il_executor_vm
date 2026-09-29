@@ -90,8 +90,8 @@ TEST_CASE(callbacks_receive_their_instance)
 
     for (i = 0; i < B_HANDLES - 2; i++)         /* handle 0 is reserved and one is in use */
         objects_create(&b_oh, FAKE_T_DATA, 8);
-    FAKE_EXPECT_OOM(objects_create(&b_oh, FAKE_T_DATA, 8));
-    CHECK(fake_oom_oh == &b_oh);
+    FAKE_EXPECT_NO_MEMORY(objects_create(&b_oh, FAKE_T_DATA, 8));
+    CHECK(fake_no_memory_oh == &b_oh);
     CHECK(objects_create(&fake_oh, FAKE_T_DATA, 8) != OBJECT_NULL);
 }
 
@@ -127,7 +127,7 @@ typedef struct {
     object_id_t     id[MIX_LIVE];
     uint8_t         fill[MIX_LIVE];
     uint32_t        live;
-    uint32_t        ooms;
+    uint32_t        no_memory_count;
 } mix_side_t;
 
 static mix_side_t mix[2];
@@ -164,13 +164,13 @@ static void mix_step(mix_side_t * side)
         uint32_t bytes = mix_rand() % 48;
         object_id_t id;
 
-        fake_oom_armed = 1;
-        if (setjmp(fake_oom_jmp) != 0) {
-            side->ooms++;
+        fake_no_memory_armed = 1;
+        if (setjmp(fake_no_memory_jmp) != 0) {
+            side->no_memory_count++;
             return;
         }
         id = objects_create(side->oh, FAKE_T_DATA, bytes);
-        fake_oom_armed = 0;
+        fake_no_memory_armed = 0;
         CHECK(id != OBJECT_NULL);
         side->id[side->live] = id;
         side->fill[side->live] = (uint8_t)(mix_rand() | 1u);
@@ -220,9 +220,9 @@ TEST_CASE(interleaved_instances_stay_consistent)
         CHECK_EQ(st.live_objects, 0);
         CHECK_EQ(st.used_bytes, 0);
     }
-    printf("interleaving: allocations ending in on_oom: %lu and %lu\n",
-           (unsigned long)mix[0].ooms, (unsigned long)mix[1].ooms);
-    CHECK(mix[1].ooms > 0);                     /* one instance ran full beside the other */
+    printf("interleaving: allocations ending in on_no_memory: %lu and %lu\n",
+           (unsigned long)mix[0].no_memory_count, (unsigned long)mix[1].no_memory_count);
+    CHECK(mix[1].no_memory_count > 0);          /* one instance ran full beside the other */
 }
 
 static const harness_case_t cases[] = {

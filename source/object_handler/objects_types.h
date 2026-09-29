@@ -140,8 +140,8 @@ typedef struct {
        For an array type, the bitmap of one element (doc 14 section 5.7). */
     const uint8_t * (*type_refmap)(obj_handler_t * oh, uint16_t type, uint32_t * words);
 
-    /* on_oom must not return; on_corrupt reports an embedder bug. */
-    void (*on_oom)(obj_handler_t * oh);
+    /* on_no_memory must not return; on_corrupt reports an embedder bug. */
+    void (*on_no_memory)(obj_handler_t * oh);
     void (*on_corrupt)(obj_handler_t * oh, const char * where, object_id_t id);
 } obj_handler_host_t;
 
