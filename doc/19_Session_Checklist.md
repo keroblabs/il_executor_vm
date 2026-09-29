@@ -336,6 +336,8 @@ These either land in the first commit's headers or block OH-1.
     (14 §7.3).
   - §10 still lists the string representation as open; UTF-8 is decided
     (14 §5.6).
+  - §6.1 checks overflow on every push against the region limit; since OH-4
+    it is checked once per call, and each push only in debug (14 §6.2).
 - [ ] **B2 — 14 §1** claims `heap.c` compiles without `WANT_OBJECT_HANDLER`.
   It does not (`heap_t` is defined twice; `flags` and `b_size` are missing).
 - [x] **B3 — 14 §3.1 against §3.3** on what an `OBJECT_SPACE_CONST` index
@@ -360,6 +362,13 @@ These either land in the first commit's headers or block OH-1.
   or a `native int`: from an `int64` they truncate, and from `F` they convert
   (14 §6.7). The condition should be the stack type, as it is for `conv.i4`
   in the same table.
+- [ ] **B8 — A byref to a local or an argument** *(open)*. 11 §5 and 14 §4
+  say a byref can designate a frame slot, but v1 has no id for one:
+  `OBJECT_SPACE_FRAME` is tier 2's scratch arena, and a slot belongs to one
+  thread's stack, which the space table cannot tell apart. Decide before
+  `cli_exec` implements `ldloca` and `ldarga`. OH-4 does not wait: its
+  scanner reports every byref base, and skipping those that are not heap
+  ids is the collector's job (14 §7.4).
 
 ### C. Build and code chores
 
@@ -411,8 +420,21 @@ These either land in the first commit's headers or block OH-1.
   rooting-scope API and D6 `gc_poll` and the safepoint contract; D7 is
   decided (14 §3.5).
 - [ ] **OH-4** — stack: threads, slots, frames (18 §6). Deferred by the owner
-  (2026-09-28). These are the managed evaluation stacks and frames, not OS
-  thread stacks: no IL runs without them, and they are the collector's roots.
+  (2026-09-28), then brought ahead of OH-3 (2026-09-29). These are the
+  managed evaluation stacks and frames, not OS thread stacks: no IL runs
+  without them, and they are the collector's roots. The heap is the
+  application's; the stack is the one state each managed thread has for
+  itself. *Decided 2026-09-29, all eight as recommended* (14 §11, 18 §12):
+  the record keeps the name `stack_thread_t` and is passed to every
+  per-thread call, so a thread switch passes another record and nothing is
+  global; the VM supplies each thread's slot and frame arrays to
+  `stack_thread_init` and ends it with `stack_thread_end`, and `stack_mem`
+  leaves the config; overflow is checked once per call, and per push and pop
+  in debug; Ruffus's push/pop/peek shape comes over per slot kind, with
+  `dup`, `drop` and `depth`, but not `stack_scanf`, `stack_push_string` or
+  `stack_dump`; no tier-2 hooks, 16-bit frame counts, `stack_frame_pop`
+  takes `ret_slots`; `stack_scan_roots` is registered with `gc.c`, the ring
+  headed in `obj_handler_t`. The collect-and-keep tests wait for OH-3.
 - [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
   (18 §7), built before OH-3 and OH-4 (`92ff6ea`). D9 decided (14 §5.6);
   `obj_string_intern` came with D7 (`e06439e`), and `value_compare` and
@@ -425,6 +447,20 @@ These either land in the first commit's headers or block OH-1.
 ### E. Later, not blocking
 
 - Finalizers and weak references (14 §11, item 1).
+- **An RPL layer** *(plan, not a requirement; owner, 2026-09-29)* — an
+  HP 48-style Reverse Polish Lisp front end on ObjectHandler, integrating
+  `value`, `obj_string` and `array` with the stack: stack words (`SWAP`,
+  `OVER`, `ROT`, `PICK`, `ROLL`) as pure slot moves, and operators that
+  take their operands from the stack and push the result — `value_compare`
+  and `value_convert` over the top slots, `obj_string_concat` for `+` on
+  strings, `GET`/`PUT` over `array_*`, lists as arrays of ids with numbers
+  boxed. It is a separate module above those four, never inside them, and
+  a second embedder, proving the library knows no CIL (14 §1). The stack
+  suits it: an operator peeks its operands, allocates while they are still
+  rooted on the stack, then pops, so it needs no rooting scope (14 §2.1.1).
+  OH-4 keeps it possible — a stack can be used with no frame, and
+  `stack_room` stands in for `MaxStack` — and arithmetic normalised like B6
+  would be its next need.
 - The tuning constants, which need host measurements (14 §11, item 2).
 - Struct copies and the write barrier, decided with tier 2 (14 §11, item 3).
 - Generational collection (11 §7.7).

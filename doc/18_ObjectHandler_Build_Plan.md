@@ -44,7 +44,7 @@ is what makes every item below testable without the rest of the system.
 | ~~OH-1~~ | ~~Foundation: types, config, spaces, resolution, build~~ | **P1** | M | D1–D4, OH-T L1–L2 | done — `7ff3a8f` |
 | ~~OH-2~~ | ~~Allocator: `heap.c`, free list, `heap_release`, `heap_verify`, stats~~ | **P2** | L | OH-1 | done — `1fe5476` |
 | OH-3 | Collector: `gc.c`, roots, scopes, triggers | **P3** | L | OH-2, D5–D7 | §5 tests |
-| OH-4 | Stack: threads, slots, frames | **P4** | M | OH-3 | §6 tests |
+| OH-4 | Stack: threads, slots, frames | **P4** | M | OH-2; the collect-and-keep tests with OH-3 | §6 tests |
 | OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9, B6; interning with D7, the tracing test with OH-3 | §7 tests — built in `92ff6ea`, `e06439e` and `6127ce6`; the tracing test waits for OH-3 |
 | OH-6 | Hardening: sanitizers, coverage, 32-bit release build, stats dump | **P6** | M | OH-2 onward | §8 tests |
 
@@ -503,8 +503,9 @@ test runs once with a payload of the maximum size.
 **Goal:** tricolour mark-sweep over the handle table, with roots.
 
 **Files:** `gc.c/.h`, plus root plumbing in `objects.c`. The thread stacks are
-reached through a scan function that `stack.c` registers (A7); until OH-4
-exists, the tests register a fake one.
+reached through a scan function that `stack.c` registers (A7); OH-4 came
+first and registers `stack_scan_roots`, and the tests may still register a
+fake one to control the roots exactly.
 
 **Consumes** (decide at the start of this slice, §9): D5 rooting-scope API,
 D6 `gc_poll` and the safepoint contract; D7 is decided (14 §3.5).
@@ -552,32 +553,47 @@ failure is ours, in a test, rather than Ruffus's, in six months.
 
 ## 6. OH-4 — Stack
 
-**Goal:** tiers 0 and 1 of 14 §6 — typed slots and overlapped frames.
+**Goal:** tiers 0 and 1 of 14 §6 — typed slots and overlapped frames, one
+stack per managed thread.
 
-**Files:** `stack.c/.h`; the thread ring that 14 §7.4 assumes.
+**Order (2026-09-29): built before OH-3**, at the owner's request. The
+decisions are 14 §11's "Stack (OH-4)" row. The tests that need a real
+collector wait for OH-3, as OH-5's tracing test does; the scanner is tested
+now, through a recording visitor (14 §7.4).
+
+**Files:** `stack.c/.h`; the thread ring that 14 §7.4 assumes, headed in
+`obj_handler_t`.
 
 **Work:**
 
 1. `stack_thread_t` and the thread ring (length one in v1, but a ring — 14
-   §7.4 and [17 §4](17_Threading_Model.md) both depend on the enumeration).
-2. Region carve-up: value stack of `stack_slot_t`, control stack of
-   `stack_frame_t`, from one caller-supplied block.
-3. `static inline` push/pop/peek per slot kind; overflow checked on push.
-4. `stack_frame_push`/`pop` with the callee's argument window overlapping the
-   caller's evaluation stack (14 §6.2), and the return-value move in `pop`.
-5. Root scanning of slots by `kind`, including `STACK_K_BYREF` bases.
+   §7.4 and [17 §4](17_Threading_Model.md) both depend on the enumeration);
+   `stack_thread_init` on the VM's record and arrays, `stack_thread_end`.
+2. `static inline` push, pop and peek per slot kind and for a whole slot;
+   `stack_dup`, `stack_drop`, `stack_depth`, `stack_room`; bounds and kinds
+   checked under `STACK_DEBUG`.
+3. `stack_frame_push`/`pop` with the callee's argument window overlapping the
+   caller's evaluation stack (14 §6.2): the overflow check per call, zeroed
+   locals, and the return-value move in `pop`.
+4. Root scanning of slots by `kind`, including `STACK_K_BYREF` bases, through
+   the scanner registered with `gc.c` (A7).
+5. `stack_verify` (layer 3, §2.1).
 
 **Done when:**
 
 - frame-overlap arithmetic: after a push, `callee->args` aliases the caller's
   top *n* slots; after a pop, the caller's stack pointer is exactly
-  `args + (returns ? 1 : 0)`;
+  `args + ret_slots`;
 - recursion to the configured depth succeeds and one frame deeper fails
-  cleanly, with no write past the region;
+  cleanly, with no write past either array;
 - **GC precision**: a slot holding an `int32` whose bit pattern is a *valid
-  live object id* is not traced, and the object it resembles is collected.
-  This is the test that proves tagged slots do what 14 §6.1 claims;
-- a byref slot keeps its base object alive.
+  live object id* is not reported by the scanner, and — with OH-3 — the
+  object it resembles is collected. This is the test that proves tagged
+  slots do what 14 §6.1 claims;
+- a byref slot reports its base, and — with OH-3 — keeps it alive;
+- two threads, switched by passing the other record, never see each other's
+  slots, and an ended thread is no longer scanned;
+- `stack_verify` catches deliberate damage.
 
 **Risk:** conflating `STACK_K_NINT` and `STACK_K_I4`. They are distinct kinds
 even though both are 32-bit (14 §6.1), and a conversion keeps them apart:
@@ -741,6 +757,7 @@ and OH-4, not deferred.
 | Instances (A14, 2026-09-28) | At the owner's request, before OH-3 and OH-4: every global moved into `obj_handler_t`, which every call takes first and every callback receives — 14 §1, §8. `objects_shutdown` and `obj_string_init` are gone, since shutdown zeroes the instance. `test_instances.c` runs two instances side by side, among them a seeded interleaving where one runs out of memory beside the other; a heap pointer kept inside `heap.c` fails three of its four cases. The same day the owner fixed the model: one application, one OS thread, several at once not a use case — the tests guard the no-globals rule, not a second application |
 | Value normalisation (B6, 2026-09-29) | At the owner's request the library normalises: `value_compare` orders any two slots and `value_convert` converts any number to any primitive type, and the interpreter chooses which and checks validity — 14 §1, §6.7. `stack_slot_t` is declared in `objects_types.h` now, so `value_compare` no longer waits for OH-4, and §6's test is inverted: `I4 5` equals `NINT 5`. A float out of range saturates, NaN to 0, as CoreCLR's does |
 | Coding value normalisation (2026-09-29) | Built in `6127ce6`. `test_value.c` gains 10 cases, among them the kind-pair matrix — 36 pairs, signed and unsigned — and a 108-row conversion table at every range bound, with NaN and the infinities. Eight mutants were each caught: no zero-extension for an unsigned target, −2^63 refused, signed order read as unsigned, NaN saturating to the maximum, `float32` rounded through a double, an off-by-one at a signed minimum, references compared across kinds, and the unsigned reading ignored. The sanitized build now adds `float-cast-overflow`, which GCC's `undefined` group omits. 8,463 bytes for Cortex-M4, from 7,128 |
+| Stack (OH-4, 2026-09-29) | At the owner's request OH-4 is built before OH-3, one stack per managed thread, with the eight recommendations of [19](19_Session_Checklist.md) OH-4 accepted: the record passed to every call, the VM's arrays per thread, one overflow check per call, Ruffus's push/pop/peek shape over typed slots, no tier-2 hooks, 16-bit frame counts, a registered scanner — 14 §6.2, §7.4, §8, §9, §11. The region carve-up of §6's first draft is gone with `stack_mem` |
 
 **Nothing remains open before OH-3:** A1–A13 are settled
 ([19 §4](19_Session_Checklist.md)). D5, D6, D7 and D9 (§9) are scheduled decisions, not

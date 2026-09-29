@@ -87,21 +87,20 @@ internals.
 ```c
 /* ---- stack.h, ObjectHandler: the execution context ------------------ */
 typedef struct stack_thread_t {
-    struct stack_thread_t * next;   /* all-threads ring, walked by gc.c     */
-    uint16_t        id;
+    obj_handler_t         * oh;     /* the instance the thread belongs to   */
+    struct stack_thread_t * next;   /* all-threads ring, scanned for gc.c   */
+    uint16_t        id;             /* the VM's; the library never reads it */
 
     /* execution point */
     const uint8_t * ip;
-    stack_frame_t * frame;
+    stack_frame_t * frame;          /* NULL: no frame pushed                */
 
-    /* stacks — carved from the shared region, see §8 */
+    /* stacks — the VM's two arrays, see §8 */
     stack_slot_t  * stack_base;
-    stack_slot_t  * sp;
+    stack_slot_t  * sp;             /* one past the top slot                */
     stack_slot_t  * stack_limit;
     stack_frame_t * frame_base;
     stack_frame_t * frame_limit;
-    uint8_t       * scratch_base;   /* OBJECT_SPACE_FRAME arena — 14 §6.3   */
-    uint16_t        scratch_top;
 } stack_thread_t;
 
 /* ---- cli_exec: the managed thread ----------------------------------- */
@@ -127,6 +126,14 @@ The split is not cosmetic: [14 §1](14_ObjectHandler.md) forbids ObjectHandler
 from knowing what a `System.Threading.Thread` is, and the earlier single
 record broke that rule. The collector walks `stack_thread_t`; the scheduler
 walks `exec_thread_t`; `&t->ctx` converts between them for free.
+
+The VM owns both halves. `stack_thread_init` fills `ctx` with the two arrays
+the VM hands it (§8) and puts it on the instance's ring; `stack_thread_end`
+takes it off when the thread dies. Every stack call takes the record, so a
+switch is the scheduler passing another thread's `ctx` — ObjectHandler keeps
+no current thread ([14 §6.2](14_ObjectHandler.md)). The stack is the one
+piece of ObjectHandler state a managed thread has for itself; the heap, the
+statics and the constants are the application's.
 
 States, taken from Ruffus's `run_mode` bitmask but made exclusive, because a
 bitmask that can express "sleeping and locked" invites bugs:
@@ -249,7 +256,7 @@ spinning on a poll page. Marking simply walks the thread ring:
 ```c
 for (stack_thread_t * t = ring; t; t = t->next) {
     scan_slots(t->stack_base, t->sp);        /* self-describing by kind */
-    scan_scratch(t);                         /* OBJECT_SPACE_FRAME arena */
+    scan_scratch(t);                         /* tier 2 — 14 §6.3        */
 }
 ```
 
@@ -388,12 +395,14 @@ avoid ([11_Memory_Model.md §8.4](11_Memory_Model.md)).
 
 ## 8. Memory
 
-Thread stacks come out of the single `stack_mem` region ObjectHandler is
-given ([14 §9](14_ObjectHandler.md)). Each thread gets three contiguous
-areas:
+Each thread's stacks are two arrays the VM hands to `stack_thread_init`
+([14 §6.2](14_ObjectHandler.md)): a value stack of `stack_slot_t` and a
+control stack of `stack_frame_t`. Tier 2 adds a scratch arena
+([14 §6.3](14_ObjectHandler.md)). The VM carves them out of one region of
+its own; ObjectHandler's config has no stack field (14 §9).
 
 ```
- [ stack_slot_t value stack ][ stack_frame_t control stack ][ scratch arena ]
+ [ stack_slot_t value stack ][ stack_frame_t control stack ]
 ```
 
 Sizing:
@@ -402,16 +411,18 @@ Sizing:
 |---|---|
 | default per-thread slot count | image header, computed by `cli_pack` from the deepest reachable call chain × (`MaxStack` + locals + args) |
 | default frame count | image header |
-| scratch bytes | image header, computed per method — [14 §6.4](14_ObjectHandler.md) |
+| scratch bytes | image header, computed per method — [14 §6.4](14_ObjectHandler.md); tier 2 |
 | maximum thread count | image header or board manifest |
 | slice length | image header, default 20 ms — §4.3 |
 | monitor table size | image header, from the reachable `lock` sites — §6.2 |
 
 On an MCU the region is one static array, partitioned at startup; threads
-beyond the configured maximum throw at `Thread.Start`. There is no growth and
-no guard page: overflow is detected by an explicit check on push and raises
-`StackOverflowException` in the offending thread only, which the model makes
-survivable — the other threads are untouched.
+beyond the configured maximum throw at `Thread.Start`, and the partition of
+a thread that has ended — released by `stack_thread_end` — serves the next.
+There is no growth and no guard page: overflow is detected when a frame is
+pushed ([14 §6.2](14_ObjectHandler.md)) and raises `StackOverflowException`
+in the offending thread only, which the model makes survivable — the other
+threads are untouched.
 
 **Recursion depth is now a visible, budgeted resource** rather than a
 property of the host's C stack. That is a real improvement over any runtime

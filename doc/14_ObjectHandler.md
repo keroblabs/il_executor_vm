@@ -72,7 +72,7 @@ source/object_handler/
     objects_types.h       /* object_id_t, spaces, kinds — shared vocabulary*/
     objects.c/.h          /* identity, spaces, handles, resolution, create */
     heap.c/.h             /* segments, payload allocator, free list        */
-    stack.c/.h            /* thread stacks, frames, slots, scratch arena   */
+    stack.c/.h            /* managed-thread stacks, frames, typed slots    */
     obj_string.c/.h       /* string objects and their operations          */
     value.c/.h            /* boxing, unboxing, numeric conversion, compare */
     array.c/.h            /* one-dimensional arrays of inline elements     */
@@ -120,7 +120,7 @@ exactly one file. §1.1 says why the string module is not called `strings`.
 |---|---|---|
 | `objects_` / `OBJECT_` | `objects.c` | object identity, `object_id_t`, spaces, handle table, resolution, generic create/clone/promote/pin, the write barrier |
 | `heap_` / `HEAP_` | `heap.c` | segments, payload allocation, free list, size-class recycler |
-| `stack_` / `STACK_` | `stack.c` | thread stack regions, frames, evaluation slots, the frame scratch arena |
+| `stack_` / `STACK_` | `stack.c` | each managed thread's value and frame stacks, evaluation slots, the thread ring; the frame scratch arena with tier 2 |
 | `obj_string_` / `OBJ_STRING_` | `obj_string.c` | `System.String` payloads, interning, string operations |
 | `value_` / `VALUE_` | `value.c` | boxing/unboxing, numeric conversion and comparison |
 | `array_` / `ARRAY_` | `array.c` | array payloads (§5.7), the one range check, bulk copy and clear |
@@ -133,9 +133,10 @@ Two consequences worth stating, because the `oh_` draft got them wrong:
   `OH_K_*`, which was a latent bug. They are now `OBJECT_K_*` (what a heap
   block holds) and `STACK_K_*` (what an evaluation slot holds).
 - **Allocation is named after where the memory comes from**, not after what
-  is built in it: `heap_alloc()` and `stack_scratch_alloc()` are the two
-  allocators; `objects_create()`, `array_create()`, `obj_string_create()`
-  and `value_box()` are the typed constructors that call them.
+  is built in it: `heap_alloc()` is the v1 allocator, and
+  `stack_scratch_alloc()` joins it with tier 2 (§6.3); `objects_create()`,
+  `array_create()`, `obj_string_create()` and `value_box()` are the typed
+  constructors that call them.
 
 ---
 
@@ -925,21 +926,34 @@ Ruffus already keeps `stack`, `sp`, `stack_base` and `locals` as four
 pointers into one physical array. That instinct is right and should be taken
 further.
 
+**One stack per managed thread (OH-4).** The heap, the statics and the
+constants belong to the application; the stack is the one piece of state
+each managed thread has for itself. Its record, `stack_thread_t`, is passed
+to every per-thread call (§8), so switching threads is the scheduler passing
+a different record: there is no current-thread pointer to switch, in a
+global or in the instance. The VM owns the record — it is the `ctx` of its
+`exec_thread_t` ([17 §3](17_Threading_Model.md)) — and supplies the
+thread's memory, an array of `stack_slot_t` and an array of `stack_frame_t`,
+to `stack_thread_init`; `stack_thread_end` takes the thread off the ring
+(§7.4) and hands the arrays back. The library allocates neither, so
+`stack.c` has no static storage.
+
 ```c
-typedef struct stack_frame_t {
-    struct stack_frame_t * prev;
-    stack_slot_t         * args;    /* this + declared parameters           */
-    stack_slot_t         * locals;
-    stack_slot_t         * stack;   /* evaluation stack base                */
-    uint16_t               scratch; /* frame scratch high-water — §6.3;
-                                       reserved, always 0 in v1             */
-    uint16_t               method;  /* embedder method id                   */
-    const uint8_t        * ip;
+typedef struct {
+    stack_slot_t  * args;           /* this + declared parameters           */
+    stack_slot_t  * locals;         /* zeroed by the push                   */
+    stack_slot_t  * stack;          /* evaluation stack base                */
+    const uint8_t * ip;             /* the VM's; never read by the library  */
+    uint16_t        method;         /* embedder method id                   */
+    uint16_t        max_stack;      /* evaluation slots reserved            */
 } stack_frame_t;
 ```
 
-Per thread there are two bump-allocated stacks in one region: a value stack
-of `stack_slot_t`, and a control stack of `stack_frame_t`.
+Per thread there are two stacks, each an array the VM supplies: a value
+stack of `stack_slot_t`, and a control stack of `stack_frame_t`. Frames are
+an array, so a frame's caller is the frame below it and needs no link. `sp`
+points one past the top slot, so a thread's live slots are
+`[stack_base, sp)`.
 
 The point of the arrangement is that **a call copies nothing**:
 
@@ -950,19 +964,29 @@ The point of the arrangement is that **a call copies nothing**:
           [ args | locals | eval ... ]
 ```
 
-`call` sets `callee->args = caller->sp - arg_slots`, then bumps past
-`locals` and `stack`. `ret` writes the return value into `callee->args[0]`
-and sets `caller->sp = callee->args + (returns ? 1 : 0)`. Argument passing
-costs two pointer arithmetic operations regardless of argument count, and
-the evaluation stack of the caller *is* the argument area of the callee.
+`stack_frame_push` sets `callee->args = caller->sp - arg_slots`, zeroes the
+locals and bumps past them to `stack`. `stack_frame_pop(t, ret_slots)`
+moves the return value into `callee->args[0]` and sets
+`caller->sp = callee->args + ret_slots`, `ret_slots` being 0 or 1. Argument
+passing costs two pointer arithmetic operations regardless of argument count,
+and the evaluation stack of the caller *is* the argument area of the callee.
+A zeroed slot is `STACK_K_EMPTY`, so a stale id left by a deeper call that
+has returned is never scanned as a root.
 
 Two consequences worth stating, because they are easy to lose later:
 
 - The frame record must **not** be interleaved with the slots. Keeping frames
   on their own stack is what lets the callee's argument window overlap the
   caller's evaluation stack.
-- Overflow is checked on push against the region limit. There is no guard
-  page on an MCU.
+- **Overflow is checked once per call, in every build.** `stack_frame_push`
+  reserves the callee's locals and its `max_stack` evaluation slots, and
+  returns `NULL` when they, or one more frame, do not fit; the VM then throws
+  `StackOverflowException` in that thread. CIL's verifier bounds every
+  method by its `MaxStack`, so no push inside the frame can pass the array.
+  A debug build also checks every push and pop against the frame and the
+  slot kind, and reports a violation to `on_corrupt`. An embedder without
+  `MaxStack` — one that pushes with no frame at all — asks `stack_room(t)`
+  first. There is no guard page on an MCU.
 
 ### 6.3 Tier 2 *(deferred — §6.0)* — the scratch space, and the recycler
 
@@ -1289,8 +1313,16 @@ safepoints by construction.
 
 **How `gc.c` reaches the stacks (A7).** `stack.c` registers one root-scan
 function with `gc.c` when it initialises; `gc.c` never includes `stack.h`.
-The collector (OH-3) is therefore built and tested before the stack (OH-4),
-against a fake scanner.
+The collector (OH-3) can therefore be tested against a fake scanner, and
+the stack (OH-4) against a recording visitor, whichever comes first.
+
+**The seam (OH-4).** `stack_thread_init` registers `stack_scan_roots(oh,
+visit)` through `gc_register_root_scan`. Called with the collector's
+visitor, it reports every non-null `STACK_K_REF` id and `STACK_K_BYREF` base
+in `[stack_base, sp)` of every thread on the instance's ring; which of them
+are collectable is the collector's to decide. The ring's head is in
+`obj_handler_t`, and `stack_thread_end` takes a thread off it, so an ended
+thread's slots stop being roots.
 
 **No `[ThreadStatic]` in v1 (A12).** `cli_pack` rejects the attribute and
 names the field, so the statics slab stays one root shared by every thread
@@ -1374,16 +1406,19 @@ void        heap_stats(obj_handler_t * oh, heap_stats_t * out);
 uint32_t    heap_in_use(obj_handler_t * oh);
 uint32_t    heap_largest_free(obj_handler_t * oh);  /* fragmentation ratio — §5.4 */
 
-/* ---- stack.h : threads, frames, slots, scratch ---------------------- */
-stack_thread_t * stack_thread_create(obj_handler_t * oh, uint32_t stack_bytes,
-                                     uint32_t scratch_bytes);
+/* ---- stack.h : managed-thread stacks, frames, slots ----------------- */
+int              stack_thread_init(obj_handler_t * oh, stack_thread_t * t,
+                                   stack_slot_t * slots, uint32_t slot_count,
+                                   stack_frame_t * frames, uint32_t frame_count);
+void             stack_thread_end(stack_thread_t * t);
 stack_frame_t  * stack_frame_push(stack_thread_t * t, uint16_t method,
-                                  uint8_t arg_slots, uint8_t local_slots,
-                                  uint8_t max_stack);
-void             stack_frame_pop(stack_thread_t * t);
-object_id_t      stack_scratch_alloc(stack_thread_t * t, uint16_t type,
-                                     uint8_t kind, uint32_t bytes);
-/* push/pop/peek per slot kind are static inline in stack.h              */
+                                  uint16_t arg_slots, uint16_t local_slots,
+                                  uint16_t max_stack);   /* NULL: overflow */
+void             stack_frame_pop(stack_thread_t * t, uint8_t ret_slots);
+void             stack_scan_roots(obj_handler_t * oh, gc_visit_fn visit);
+int              stack_verify(obj_handler_t * oh);
+/* static inline in stack.h: push, pop and peek per slot kind and for a
+   whole slot; stack_dup, stack_drop, stack_depth, stack_room            */
 
 /* ---- array.h / obj_string.h / value.h : typed constructors ----------- */
 object_id_t array_create(obj_handler_t * oh, uint16_t type, uint16_t elem_size,
@@ -1417,12 +1452,15 @@ int         value_convert(obj_handler_t * oh, const stack_slot_t * src, uint8_t 
 void     gc_collect(obj_handler_t * oh);
 void     gc_request(obj_handler_t * oh);    /* set the flag — §7.3        */
 void     gc_stats(obj_handler_t * oh, gc_stats_t * out);
+void     gc_register_root_scan(obj_handler_t * oh, gc_scan_fn scan);  /* §7.4 */
 ```
 
 Every byte count and element count in this API is 32-bit, and stays 32-bit
 when the v1 payload cap is lifted (§2.3.1). Sizes that describe a *type* —
 `type`, `elem_size`, `literal_index` — stay 16-bit because widening them is an
-embedder question, not a heap question.
+embedder question, not a heap question. So do the counts that describe a
+*method's frame* — `arg_slots`, `local_slots`, `max_stack` — because CIL's
+are: `MaxStack` and the `ldarg` and `ldloc` indices are 16-bit fields.
 
 **Every call takes its instance first, and every per-thread stack call its
 `stack_thread_t *` (I2).** A thread belongs to the instance that created it,
@@ -1464,11 +1502,13 @@ typedef struct {
 
     uint16_t        string_type;    /* System.String's type id — D9, §5.6 */
 
-    uint8_t       * stack_mem;      uint32_t stack_size;     /* all threads */
-
     uint16_t        worklist_len;   uint16_t * worklist;
 } obj_handler_config_t;
 ```
+
+Thread stacks are not in it. The VM supplies each managed thread's slots and
+frames to `stack_thread_init` (§6.2), so how many threads there are and how
+large each stack is are the VM's to decide ([17 §8](17_Threading_Model.md)).
 
 The size fields are 32-bit for the reason in §2.3.1 — the struct is the
 embedder's compile-time contract, and it should not be the thing that breaks
@@ -1549,7 +1589,7 @@ typedef enum {
 | Order | checks run in enum order and the first failure is returned, so a test can trip exactly one check and assert its code |
 | Atomicity | every check runs before any region or instance field is written; a failed init leaves the instance uninitialised, and init may simply be called again |
 | Stability | `OBJ_HANDLER_OK` is 0; codes are appended, never renumbered |
-| Growth | a code arrives with the slice that first reads its field — `E_STATICS` and `E_CONST` with D7, `E_GC_PCT` with OH-3, `E_STACK` with OH-4 — so no code exists without a check and a test |
+| Growth | a code arrives with the slice that first reads its field — `E_STATICS` and `E_CONST` with D7, `E_GC_PCT` with OH-3 — so no code exists without a check and a test. OH-4 adds none: a thread's memory arrives after init, so a bad one goes to `on_corrupt` |
 
 The limits behind the codes:
 
@@ -1580,7 +1620,9 @@ The limits behind the codes:
 | `signature` corruption checks on every block | **kept as a debug profile**, off in release |
 | `object_t` as `uint16_t` | **widened** to `object_id_t` |
 | Boxed primitives on the stack (`stack.h`, `value_type.c`) | **rejected** — §6.1 |
+| `stack_push_*`, `stack_pop_*` and `stack_peek_*`, one per Java type | **kept as a shape** — one per slot kind, over typed slots; narrow types are promoted, so they need none — §6.1, §8 |
 | `instance_get_current()` inside stack accessors | **rejected** — thread passed explicitly |
+| Each thread's stack taken from the heap (`stack_init`) | **replaced** — the VM supplies each thread's slots and frames — §6.2 |
 | `app_instance`, one global pointer switched between applications | **replaced** — one application, whose `obj_handler_t` is passed to every call — §1, §8 |
 | Heap ≤ 64 KB | **kept as the v1 profile**, per segment; the id abstracts it — §2.3.1 |
 | Arrays as growable lists (`array_insert`, `array_delete`, in-place resize) | **rejected** — CIL arrays have a fixed length; `List<T>` grows in managed code — §5.7 |
@@ -1619,6 +1661,7 @@ The limits behind the codes:
 | Application and instance (A14, 2026-09-28) | The owner's model: an application is one CLI binary, packed into one image and run on one OS thread; its managed threads are green threads the VM schedules; running several applications at once is not a use case. **All library state is in `obj_handler_t`**, which every call takes first and every host callback receives, so the library keeps no hidden globals (§8). Built before OH-3 and OH-4 — §1, §7.5, §8, §9 |
 | Value normalisation (B6, 2026-09-29) | **The library normalises; the interpreter chooses.** `value_compare` orders any two slots and `value_convert` converts any number to any primitive type; which one an opcode needs, and whether its operands are valid under §III.1.5, is the interpreter's. Integers compare in 64 bits, signed or unsigned; an integer meets a double through the conversion; references compare by id, byrefs by address, any other mix is `VALUE_UNORDERED`. Conversions follow Table III.8, and a float out of range saturates, NaN to 0. `stack_slot_t` is declared in `objects_types.h` — §1, §6.1, §6.7 |
 | Coding value normalisation (2026-09-29) | `VALUE_T_*` start at 1, so a zeroed target is refused: 0, `VALUE_T_COUNT` and above go to `on_corrupt`. `value_convert` builds its result in a zeroed slot — `flags` and `aux` 0 — and writes `dst` only when it returns 1. Integers are read and narrowed as 64-bit patterns, with no implementation-defined conversion. The sanitized debug build adds `float-cast-overflow`, which GCC's `undefined` group leaves out, so a double cast out of range cannot pass unnoticed — §6.7 |
+| Stack (OH-4, 2026-09-29) | [19](19_Session_Checklist.md) OH-4, accepted as recommended, built before OH-3. The record is `stack_thread_t`, passed to every per-thread call: no current-thread pointer anywhere. The VM supplies each thread's slot and frame arrays and ends a thread with `stack_thread_end`, so `stack_mem` leaves the config. Overflow is checked once per call in every build, per push and pop in debug; `stack_room` serves frameless use. From Ruffus's API come push, pop and peek per slot kind, `dup`, `drop` and `depth` — not `stack_scanf`, `stack_push_string` or `stack_dump`. The tier-2 hooks leave the API, the frame counts are 16-bit, and `stack_frame_pop` takes `ret_slots`. A registered scanner reaches the stacks (A7) — §6.2, §7.4, §8, §9 |
 
 **Still open:**
 
