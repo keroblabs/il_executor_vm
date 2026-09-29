@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-28**, at commit `ce58272`.
+State recorded here: **2026-09-29**, at commit `d682790`.
 
 ---
 
@@ -181,6 +181,8 @@ The commands are in §5.3.
 | `4ec7b8d` | checklist: the instances session |
 | `3f33e07` | application model aligned: one CLI binary, one image, one OS thread; docs 11, 14, 17, 18 |
 | `ce58272` | comments and test names follow the one-application model |
+| `b81ec73` | checklist: the application-model alignment |
+| `d682790` | the out-of-memory callback `on_oom` renamed `on_no_memory`; tests and docs follow |
 
 ### 3.2 Code, file by file
 
@@ -481,6 +483,13 @@ rm -rf "$d"
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-29** — At the owner's request the out-of-memory callback
+  `on_oom` is now `on_no_memory`, and every test name built on it follows
+  (`fake_no_memory_count`, `FAKE_EXPECT_NO_MEMORY`, the two
+  `*_ends_in_on_no_memory` cases); 14 §7.5 now says what it is (`d682790`).
+  101 cases pass in the three builds; every file compiles clean for host and
+  ARM, C99 and C11.
 
 - **2026-09-28, sixth part** — The owner aligned the model: an application
   is one CLI binary, packed into one image, on one OS thread; managed threads
