@@ -26,9 +26,11 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(object_handler PRIVATE
         -Wall -Wextra -Werror -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes)
     if(OBJECT_HANDLER_SANITIZE)
+        # GCC's undefined group leaves out float-cast-overflow, which value_convert must never trip.
         target_compile_options(object_handler PUBLIC
-            -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
-        target_link_options(object_handler PUBLIC -fsanitize=address,undefined)
+            -fsanitize=address,undefined,float-cast-overflow
+            -fno-sanitize-recover=undefined,float-cast-overflow -fno-omit-frame-pointer)
+        target_link_options(object_handler PUBLIC -fsanitize=address,undefined,float-cast-overflow)
     endif()
 endif()
 

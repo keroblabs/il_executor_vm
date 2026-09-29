@@ -112,6 +112,32 @@ typedef struct {
     uint16_t    _pad;
 } object_byref_t;
 
+/* ---- stack slot, read by value.c (doc 14 section 6.1) --------------- */
+
+enum {
+    STACK_K_EMPTY = 0,
+    STACK_K_I4,
+    STACK_K_I8,
+    STACK_K_R8,
+    STACK_K_NINT,
+    STACK_K_REF,                /* u.id */
+    STACK_K_BYREF               /* u.byref_base, with the offset in aux */
+};
+
+typedef struct {
+    uint8_t  kind;              /* STACK_K_* */
+    uint8_t  flags;             /* reserved */
+    uint16_t aux;               /* byref offset */
+    union {
+        int32_t     i4;
+        int64_t     i8;
+        double      r8;
+        int32_t     nint;       /* native int is 32 bits on every target */
+        object_id_t id;
+        object_id_t byref_base;
+    } u;
+} stack_slot_t;
+
 /* ---- array payload header, read by gc.c (doc 14 section 5.7) -------- */
 
 typedef struct {
@@ -183,6 +209,7 @@ OBJECT_STATIC_ASSERT(sizeof(object_handle_t) == 8, handle_is_8_bytes);
 OBJECT_STATIC_ASSERT(OBJECT_SPACE_COUNT <= 0x100u, debug_ids_carry_8_bit_spaces);
 #endif
 OBJECT_STATIC_ASSERT(sizeof(object_byref_t) == 8, byref_is_8_bytes);
+OBJECT_STATIC_ASSERT(sizeof(((stack_slot_t *)0)->u) == 8, slot_value_is_8_bytes);
 OBJECT_STATIC_ASSERT(sizeof(array_header_t) == 8, array_header_is_8_bytes);
 OBJECT_STATIC_ASSERT(sizeof(object_const_t) == 12, const_entry_is_12_bytes);
 OBJECT_STATIC_ASSERT(HEAP_SEGMENTS >= 1 && HEAP_SEGMENTS <= 16, heap_segments_fit_the_tags);
