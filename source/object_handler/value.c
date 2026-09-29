@@ -112,6 +112,18 @@ static uintptr_t value_address(obj_handler_t * oh, const stack_slot_t * s)
     return (uintptr_t)objects_byref_ptr(oh, b);
 }
 
+/* A byref into a thread's stack has no address without the thread (doc 14 section 4.1). */
+static int value_on_stack(const stack_slot_t * s)
+{
+    return OBJECT_SPACE(s->u.byref_base) == OBJECT_SPACE_STACK;
+}
+
+/* Slot, then offset: the order of the addresses the thread would give them. */
+static uint64_t value_stack_position(const stack_slot_t * s)
+{
+    return (uint64_t)OBJECT_INDEX(s->u.byref_base) * sizeof(stack_slot_t) + s->aux;
+}
+
 int32_t value_compare(obj_handler_t * oh, const stack_slot_t * a, const stack_slot_t * b,
                       uint32_t flags)
 {
@@ -134,6 +146,11 @@ int32_t value_compare(obj_handler_t * oh, const stack_slot_t * a, const stack_sl
         return VALUE_UNORDERED;
     if (a->kind == STACK_K_REF)
         return value_order(a->u.id, b->u.id);
+    if (value_on_stack(a) || value_on_stack(b)) {
+        if (!value_on_stack(a) || !value_on_stack(b))
+            return VALUE_UNORDERED;
+        return value_order(value_stack_position(a), value_stack_position(b));
+    }
     return value_order(value_address(oh, a), value_address(oh, b));
 }
 

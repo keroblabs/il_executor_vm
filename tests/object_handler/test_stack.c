@@ -107,12 +107,13 @@ TEST_CASE(thread_init_refuses_misuse)
     CHECK(!stack_thread_init(&fake_oh, &t, NULL, SLOTS, frames_a, FRAMES));
     CHECK(!stack_thread_init(&fake_oh, &t, slots_a, 0, frames_a, FRAMES));
     CHECK(!stack_thread_init(&fake_oh, &t, slots_a, SLOTS, NULL, FRAMES));
-    CHECK_EQ(fake_corrupt_count, 4);
+    CHECK(!stack_thread_init(&fake_oh, &t, slots_a, 65537u, frames_a, FRAMES)); /* past a byref's index */
+    CHECK_EQ(fake_corrupt_count, 5);
     CHECK(fake_oh.threads == NULL);
 
     CHECK(stack_thread_init(&fake_oh, &t, slots_a, SLOTS, frames_a, FRAMES));
     CHECK(!stack_thread_init(&fake_oh, &t, slots_b, SLOTS, frames_b, FRAMES));
-    CHECK_EQ(fake_corrupt_count, 5);
+    CHECK_EQ(fake_corrupt_count, 6);
     CHECK(t.stack_base == slots_a && fake_oh.threads == &t && t.next == NULL);
 }
 
@@ -129,7 +130,7 @@ TEST_CASE(frameless_thread_uses_the_whole_array)
         stack_push_i4(&t, (int32_t)i);
     CHECK_EQ(stack_depth(&t), SLOTS);
     CHECK_EQ(stack_room(&t), 0);
-    CHECK(stack_frame_push(&t, 1, 0, 0, 0) == NULL);    /* no frames to push */
+    CHECK(stack_frame_push(&t, 1, 0, 0, 0, NULL) == NULL);    /* no frames to push */
     CHECK_EQ(stack_peek_i4(&t, SLOTS - 1), 0);
     CHECK_EQ(stack_pop_i4(&t), SLOTS - 1);
     CHECK_EQ(stack_room(&t), 1);
@@ -160,7 +161,7 @@ TEST_CASE(thread_end_leaves_the_ring)
     fake_allow_corrupt();
     stack_thread_end(&tb);
     CHECK_EQ(fake_corrupt_count, 1);
-    CHECK(stack_frame_push(&tb, 1, 0, 0, 1) == NULL);
+    CHECK(stack_frame_push(&tb, 1, 0, 0, 1, NULL) == NULL);
     stack_frame_pop(&tb, 0);
     CHECK_EQ(fake_corrupt_count, 3);
 
@@ -284,7 +285,7 @@ TEST_CASE(debug_checks_bounds_and_kinds)
     CHECK_EQ(stack_depth(&ta), 1);
     CHECK(stack_pop_r8(&ta) == 1.0);
 
-    CHECK(stack_frame_push(&ta, 1, 0, 1, 2) != NULL);
+    CHECK(stack_frame_push(&ta, 1, 0, 1, 2, NULL) != NULL);
     stack_push_i4(&ta, 1);
     stack_push_i4(&ta, 2);
     stack_push_i4(&ta, 3);                      /* past max_stack */
@@ -324,7 +325,7 @@ TEST_CASE(frame_push_overlaps_the_arguments)
     stack_push_i4(&ta, 1);
     stack_push_i4(&ta, 2);
     stack_push_i4(&ta, 3);
-    f = stack_frame_push(&ta, 7, 3, 2, 4);
+    f = stack_frame_push(&ta, 7, 3, 2, 4, NULL);
     CHECK(f == &frames_a[0] && ta.frame == f);
     CHECK(f->args == &slots_a[1]);              /* the caller's top three slots */
     CHECK(f->locals == &slots_a[4] && f->stack == &slots_a[6] && ta.sp == f->stack);
@@ -340,7 +341,7 @@ TEST_CASE(frame_push_overlaps_the_arguments)
 
     stack_push_i4(&ta, 20);
     stack_push_i4(&ta, 21);
-    g = stack_frame_push(&ta, 8, 2, 0, 1);
+    g = stack_frame_push(&ta, 8, 2, 0, 1, NULL);
     CHECK(g == &frames_a[1]);
     CHECK(g->args == &f->stack[0] && g->locals == &f->stack[2] && g->stack == g->locals);
     CHECK_EQ(g->args[1].u.i4, 21);
@@ -359,7 +360,7 @@ TEST_CASE(frame_pop_moves_the_return_value)
     stack_push_i4(&ta, 100);
     stack_push_i4(&ta, 5);
     stack_push_i4(&ta, 6);
-    f = stack_frame_push(&ta, 1, 2, 1, 3);
+    f = stack_frame_push(&ta, 1, 2, 1, 3, NULL);
     args = f->args;
     stack_push_i4(&ta, f->args[0].u.i4 + f->args[1].u.i4);
     stack_frame_pop(&ta, 1);
@@ -370,8 +371,8 @@ TEST_CASE(frame_pop_moves_the_return_value)
     CHECK_EQ(stack_pop_i4(&ta), 100);
 
     stack_push_i4(&ta, 1);
-    f = stack_frame_push(&ta, 1, 0, 0, 1);      /* no arguments: the result lands at the old top */
-    CHECK(stack_frame_push(&ta, 2, 0, 0, 0) != NULL);
+    f = stack_frame_push(&ta, 1, 0, 0, 1, NULL);      /* no arguments: the result lands at the old top */
+    CHECK(stack_frame_push(&ta, 2, 0, 0, 0, NULL) != NULL);
     stack_frame_pop(&ta, 0);                    /* a void call */
     CHECK(ta.frame == f && ta.sp == f->stack);
     stack_push_ref(&ta, OBJECT_ID(OBJECT_SPACE_STATIC, 8));
@@ -389,7 +390,7 @@ TEST_CASE(locals_are_zeroed_so_a_stale_id_is_no_root)
     stack_frame_t * f;
 
     start();
-    f = stack_frame_push(&ta, 1, 0, 2, 2);
+    f = stack_frame_push(&ta, 1, 0, 2, 2, NULL);
     f->locals[1].kind = STACK_K_REF;
     f->locals[1].u.id = OBJECT_ID(OBJECT_SPACE_STATIC, 8);
     stack_push_ref(&ta, OBJECT_ID(OBJECT_SPACE_STATIC, 16));
@@ -397,7 +398,7 @@ TEST_CASE(locals_are_zeroed_so_a_stale_id_is_no_root)
     scan();
     CHECK_EQ(seen_count, 0);                    /* above sp: no longer scanned */
 
-    f = stack_frame_push(&ta, 2, 0, 3, 0);      /* over the same slots */
+    f = stack_frame_push(&ta, 2, 0, 3, 0, NULL);      /* over the same slots */
     CHECK_EQ(f->locals[1].kind, STACK_K_EMPTY);
     CHECK_EQ(f->locals[2].kind, STACK_K_EMPTY);
     scan();
@@ -414,12 +415,12 @@ TEST_CASE(recursion_to_the_frame_limit)
     start();
     stack_push_i4(&ta, 0);
     for (depth = 0; depth < FRAMES; depth++) {
-        f = stack_frame_push(&ta, 1, 1, 1, 2);
+        f = stack_frame_push(&ta, 1, 1, 1, 2, NULL);
         CHECK(f != NULL);
         stack_push_i4(&ta, (int32_t)depth + 1);  /* the next call's argument */
     }
     sp = ta.sp;
-    CHECK(stack_frame_push(&ta, 1, 1, 1, 2) == NULL);
+    CHECK(stack_frame_push(&ta, 1, 1, 1, 2, NULL) == NULL);
     CHECK(ta.frame == f && ta.sp == sp);
     CHECK(guard_intact(&frames_a[FRAMES], sizeof frames_a[FRAMES]));
     CHECK(guard_intact(&slots_a[SLOTS], sizeof slots_a[SLOTS]));
@@ -448,7 +449,7 @@ TEST_CASE(recursion_to_the_slot_limit)
 
     start();
     /* A call needs its locals and max_stack free above sp: 16 here, 10 of them kept. */
-    while (stack_frame_push(&ta, 1, 0, 10, 6) != NULL)
+    while (stack_frame_push(&ta, 1, 0, 10, 6, NULL) != NULL)
         calls++;
     CHECK_EQ(calls, 5);                         /* 5 x 10 + 6 <= 64 < 6 x 10 + 6 */
     CHECK(ta.sp == slots_a + 50 && ta.frame == &frames_a[4]);
@@ -456,9 +457,9 @@ TEST_CASE(recursion_to_the_slot_limit)
     top = ta.frame;
     for (i = 0; i < 6; i++)
         stack_push_i4(&ta, (int32_t)i);         /* the whole of max_stack */
-    CHECK(stack_frame_push(&ta, 1, 6, 3, 6) == NULL);     /* 9 needed, 8 left */
+    CHECK(stack_frame_push(&ta, 1, 6, 3, 6, NULL) == NULL);     /* 9 needed, 8 left */
     CHECK(ta.frame == top && ta.sp == slots_a + 56);
-    CHECK(stack_frame_push(&ta, 1, 6, 2, 6) != NULL);     /* exactly the 8 left */
+    CHECK(stack_frame_push(&ta, 1, 6, 2, 6, NULL) != NULL);     /* exactly the 8 left */
     CHECK(ta.sp + 6 == ta.stack_limit);
     CHECK_EQ(ta.frame->args[5].u.i4, 5);
     CHECK(guard_intact(&slots_a[SLOTS], sizeof slots_a[SLOTS]));
@@ -474,10 +475,10 @@ TEST_CASE(frame_misuse_is_corrupt)
     start();
     fake_allow_corrupt();
     stack_push_i4(&ta, 1);
-    CHECK(stack_frame_push(&ta, 1, 2, 0, 0) == NULL);   /* two arguments, one slot */
+    CHECK(stack_frame_push(&ta, 1, 2, 0, 0, NULL) == NULL);   /* two arguments, one slot */
     stack_frame_pop(&ta, 0);                    /* no frame */
     CHECK_EQ(fake_corrupt_count, 2);
-    f = stack_frame_push(&ta, 1, 1, 0, 1);
+    f = stack_frame_push(&ta, 1, 1, 0, 1, NULL);
     CHECK(f != NULL);
     stack_frame_pop(&ta, 1);                    /* no value to return */
     stack_frame_pop(&ta, 2);
@@ -508,7 +509,7 @@ TEST_CASE(scan_reports_references_and_byref_bases_only)
     stack_push_nint(&ta, (int32_t)looks_alike);
     stack_push_i8(&ta, (int64_t)looks_alike);
     stack_push_ref(&ta, OBJECT_NULL);
-    f = stack_frame_push(&ta, 1, 1, 2, 3);      /* the null reference becomes an argument */
+    f = stack_frame_push(&ta, 1, 1, 2, 3, NULL);      /* the null reference becomes an argument */
     f->locals[0].kind = STACK_K_REF;
     f->locals[0].u.id = kept;
     b.id = base;
@@ -567,7 +568,7 @@ TEST_CASE(threads_switch_by_passing_the_record)
 
         if (phase == 0) {
             stack_push_i4(t, mine);
-            CHECK(stack_frame_push(t, (uint16_t)mine, 1, 1, 2) != NULL);
+            CHECK(stack_frame_push(t, (uint16_t)mine, 1, 1, 2, NULL) != NULL);
         } else if (phase == 1) {
             stack_push_i4(t, t->frame->args[0].u.i4 + 1);
         } else if (phase == 2) {
@@ -584,6 +585,155 @@ TEST_CASE(threads_switch_by_passing_the_record)
     CHECK_EQ(fake_corrupt_count, 0);
 }
 
+/* ---- byrefs to locals and arguments (doc 14 section 4.1) ------------ */
+
+TEST_CASE(frame_push_types_the_locals)
+{
+    static const uint8_t kinds[] = { STACK_K_I4, STACK_K_REF, STACK_K_R8,
+                                     STACK_K_BYREF, STACK_K_NINT, STACK_K_I8 };
+    stack_frame_t * f;
+    uint32_t i;
+
+    start();                                    /* the slots hold guard bytes */
+    f = stack_frame_push(&ta, 1, 0, 6, 1, kinds);
+    for (i = 0; i < 6; i++) {
+        CHECK_EQ(f->locals[i].kind, kinds[i]);
+        CHECK_EQ(f->locals[i].flags | f->locals[i].aux, 0);
+        CHECK_EQ(f->locals[i].u.i8, 0);
+    }
+    scan();
+    CHECK_EQ(seen_count, 0);                    /* a REF local starts as null */
+    CHECK(stack_verify(&fake_oh));
+    stack_frame_pop(&ta, 0);
+
+    f = stack_frame_push(&ta, 2, 0, 2, 0, NULL);
+    CHECK_EQ(f->locals[0].kind, STACK_K_EMPTY);
+    CHECK_EQ(f->locals[1].kind, STACK_K_EMPTY);
+    CHECK_EQ(fake_corrupt_count, 0);
+}
+
+TEST_CASE(out_arguments_write_the_callers_locals)
+{
+    static const uint8_t kinds[] = { STACK_K_I4, STACK_K_REF };
+    stack_frame_t * caller;
+    object_byref_t b;
+    object_id_t found;
+    object_id_t item;
+    int32_t value;
+
+    start();
+    found = objects_create(&fake_oh, FAKE_T_DATA, 8);
+    caller = stack_frame_push(&ta, 1, 0, 2, 2, kinds);
+    b = stack_slot_byref(&ta, &caller->locals[0]);             /* ldloca.0 */
+    CHECK(b.id == OBJECT_ID(OBJECT_SPACE_STACK, 0) && b.offset == 0);
+    stack_push_byref(&ta, b);
+    stack_push_byref(&ta, stack_slot_byref(&ta, &caller->locals[1]));  /* ldloca.1 */
+
+    /* The callee is TryGet(out int count, out object item). */
+    CHECK(stack_frame_push(&ta, 2, 2, 0, 2, NULL) != NULL);
+    CHECK(stack_verify(&fake_oh));
+    stack_push(&ta, &ta.frame->args[0]);        /* ldarg.0 */
+    stack_push_i4(&ta, 42);
+    value = stack_pop_i4(&ta);                  /* stind.i4 */
+    *(int32_t *)stack_byref_ptr(&ta, stack_pop_byref(&ta)) = value;
+    stack_push(&ta, &ta.frame->args[1]);        /* ldarg.1 */
+    stack_push_ref(&ta, found);
+    item = stack_pop_ref(&ta);                  /* stind.ref */
+    objects_write_ref(&fake_oh, (object_id_t *)stack_byref_ptr(&ta, stack_pop_byref(&ta)), item);
+    stack_frame_pop(&ta, 0);
+
+    CHECK(ta.frame == caller && stack_depth(&ta) == 0);
+    CHECK_EQ(caller->locals[0].kind, STACK_K_I4);
+    CHECK_EQ(caller->locals[0].u.i4, 42);
+    CHECK_EQ(caller->locals[1].kind, STACK_K_REF);
+    CHECK(caller->locals[1].u.id == found);
+    scan();
+    CHECK_EQ(times_seen(found), 1);             /* stored through a byref, still a root */
+    CHECK_EQ(fake_oh.spaces[OBJECT_SPACE_STACK].flags & OBJECT_SP_COLLECTED, 0);
+    CHECK(stack_verify(&fake_oh));
+    CHECK_EQ(fake_corrupt_count, 0);
+}
+
+TEST_CASE(byref_to_a_local_is_its_storage)
+{
+    static const uint8_t kinds[] = { STACK_K_I4, STACK_K_R8 };
+    const int8_t small = -5;
+    const float single = 1.5f;
+    stack_frame_t * f;
+    object_byref_t b;
+
+    start();
+    f = stack_frame_push(&ta, 1, 0, 2, 0, kinds);
+    b = stack_slot_byref(&ta, &f->locals[0]);
+    CHECK(stack_byref_ptr(&ta, b) == (void *)&f->locals[0].u);
+    memcpy(stack_byref_ptr(&ta, b), &small, sizeof small);    /* stind.i1 */
+    CHECK_EQ(*(const int8_t *)(const void *)&f->locals[0].u, -5);   /* what ldloc widens */
+    b.offset = 3;
+    CHECK(stack_byref_ptr(&ta, b) == (void *)((uint8_t *)&f->locals[0].u + 3));
+
+    b = stack_slot_byref(&ta, &f->locals[1]);
+    memcpy(stack_byref_ptr(&ta, b), &single, sizeof single);  /* stind.r4: a single, not a double */
+    CHECK(memcmp(&f->locals[1].u, &single, sizeof single) == 0);
+    CHECK_EQ(f->locals[1].kind, STACK_K_R8);
+
+    b.id = OBJECT_ID(OBJECT_SPACE_STATIC, 16);  /* any other byref resolves through its space */
+    b.offset = 2;
+    CHECK(stack_byref_ptr(&ta, b) == fake_statics() + 18);
+    CHECK_EQ(fake_corrupt_count, 0);
+}
+
+TEST_CASE(a_stack_byref_needs_its_thread)
+{
+    static const uint8_t kinds[] = { STACK_K_I4 };
+    stack_frame_t * f;
+    object_byref_t b;
+
+    start();
+    f = stack_frame_push(&ta, 1, 0, 1, 0, kinds);
+    b = stack_slot_byref(&ta, &f->locals[0]);
+    fake_allow_corrupt();
+    CHECK(objects_byref_ptr(&fake_oh, b) == NULL);     /* no space entry can say which stack */
+    CHECK_EQ(fake_corrupt_count, 1);
+    CHECK(stack_byref_ptr(&ta, b) == (void *)&f->locals[0].u);
+    CHECK_EQ(fake_corrupt_count, 1);
+}
+
+TEST_CASE(debug_checks_stack_byrefs)
+{
+#if STACK_DEBUG
+    static const uint8_t kinds[] = { STACK_K_I4, STACK_K_EMPTY };
+    static const uint8_t unknown[] = { STACK_K_BYREF + 1 };
+    stack_frame_t * f;
+    object_byref_t b;
+
+    start();
+    fake_allow_corrupt();
+    f = stack_frame_push(&ta, 1, 0, 2, 1, kinds);
+    b = stack_slot_byref(&ta, &f->locals[1]);   /* an untyped local */
+    CHECK(b.id == OBJECT_NULL);
+    b = stack_slot_byref(&ta, ta.sp);           /* the top, not below it */
+    CHECK(b.id == OBJECT_NULL);
+    CHECK_EQ(fake_corrupt_count, 2);
+
+    b = stack_slot_byref(&ta, &f->locals[0]);
+    b.offset = 8;                               /* past the value */
+    CHECK(stack_byref_ptr(&ta, b) == NULL);
+    b.offset = 0;
+    b.id = OBJECT_ID(OBJECT_SPACE_STACK, 2);
+    CHECK(stack_byref_ptr(&ta, b) == NULL);
+    b.id = OBJECT_ID(OBJECT_SPACE_STACK, 0xFFFF);
+    CHECK(stack_byref_ptr(&ta, b) == NULL);
+    CHECK_EQ(fake_corrupt_count, 5);
+
+    stack_frame_pop(&ta, 0);
+    f = stack_frame_push(&ta, 1, 0, 1, 0, unknown);
+    CHECK_EQ(f->locals[0].kind, STACK_K_EMPTY);
+    CHECK_EQ(fake_corrupt_count, 6);
+#else
+    harness_skip("byref checks are a debug-build feature");
+#endif
+}
+
 /* ---- stack_verify (doc 18 section 2.1, layer 3) --------------------- */
 
 TEST_CASE(verify_catches_damage)
@@ -597,9 +747,9 @@ TEST_CASE(verify_catches_damage)
     start();
     CHECK(stack_thread_init(&fake_oh, &tb, slots_b, SLOTS, frames_b, FRAMES));
     stack_push_i4(&ta, 1);
-    f = stack_frame_push(&ta, 1, 1, 1, 3);
+    f = stack_frame_push(&ta, 1, 1, 1, 3, NULL);
     stack_push_i4(&ta, 2);
-    g = stack_frame_push(&ta, 2, 1, 0, 2);
+    g = stack_frame_push(&ta, 2, 1, 0, 2, NULL);
     stack_push_r8(&ta, 3.0);
     CHECK(stack_verify(&fake_oh));
     fake_allow_corrupt();
@@ -633,9 +783,15 @@ TEST_CASE(verify_catches_damage)
     CHECK(!stack_verify(&fake_oh));
     tb.oh = &fake_oh;
 
-    CHECK_EQ(fake_corrupt_count, 7);
+    slots_a[2].kind = STACK_K_BYREF;            /* g's argument, now a byref to the top */
+    slots_a[2].u.byref_base = OBJECT_ID(OBJECT_SPACE_STACK, 4);
+    CHECK(!stack_verify(&fake_oh));
+    slots_a[2].kind = STACK_K_I4;
+    slots_a[2].u.i4 = 2;
+
+    CHECK_EQ(fake_corrupt_count, 8);
     CHECK(stack_verify(&fake_oh));
-    CHECK_EQ(fake_corrupt_count, 7);
+    CHECK_EQ(fake_corrupt_count, 8);
 }
 
 static const harness_case_t cases[] = {
@@ -655,6 +811,11 @@ static const harness_case_t cases[] = {
     HARNESS_CASE(scan_reports_references_and_byref_bases_only),
     HARNESS_CASE(scan_walks_every_thread),
     HARNESS_CASE(threads_switch_by_passing_the_record),
+    HARNESS_CASE(frame_push_types_the_locals),
+    HARNESS_CASE(out_arguments_write_the_callers_locals),
+    HARNESS_CASE(byref_to_a_local_is_its_storage),
+    HARNESS_CASE(a_stack_byref_needs_its_thread),
+    HARNESS_CASE(debug_checks_stack_byrefs),
     HARNESS_CASE(verify_catches_damage),
 };
 

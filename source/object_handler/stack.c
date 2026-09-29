@@ -25,6 +25,8 @@ int stack_thread_init(obj_handler_t * oh, stack_thread_t * t, stack_slot_t * slo
         return 0;
     if (t == NULL || slots == NULL || slot_count == 0 || (frames == NULL && frame_count != 0))
         return stack_fault(oh, "stack_thread_init: no record, or no slots");
+    if (slot_count > 65536u)
+        return stack_fault(oh, "stack_thread_init: more slots than a byref can index");
     if (t->stack_base != NULL)
         return stack_fault(oh, "stack_thread_init: a live thread; end it first");
     memset(t, 0, sizeof *t);
@@ -61,9 +63,11 @@ void stack_thread_end(stack_thread_t * t)
 }
 
 stack_frame_t * stack_frame_push(stack_thread_t * t, uint16_t method, uint16_t arg_slots,
-                                 uint16_t local_slots, uint16_t max_stack)
+                                 uint16_t local_slots, uint16_t max_stack,
+                                 const uint8_t * local_kinds)
 {
     stack_frame_t * f;
+    uint32_t i;
 
     if (!stack_live(t, "stack_frame_push: not a live thread"))
         return NULL;
@@ -82,6 +86,15 @@ stack_frame_t * stack_frame_push(stack_thread_t * t, uint16_t method, uint16_t a
     f->method = method;
     f->max_stack = max_stack;
     memset(f->locals, 0, (size_t)local_slots * sizeof *f->locals);
+    for (i = 0; local_kinds != NULL && i < local_slots; i++) {
+#if STACK_DEBUG
+        if (local_kinds[i] > STACK_K_BYREF) {
+            stack_fault(t->oh, "stack_frame_push: an unknown local kind");
+            continue;
+        }
+#endif
+        f->locals[i].kind = local_kinds[i];
+    }
     t->sp = f->stack;
     t->frame = f;
     return f;
@@ -155,9 +168,14 @@ static int stack_thread_ok(obj_handler_t * oh, const stack_thread_t * t)
     if (!stack_slot_in(t, t->sp, low)
         || (t->frame != NULL && (uint32_t)(t->sp - t->frame->stack) > t->frame->max_stack))
         return stack_fault(oh, "stack_verify: sp");
-    for (s = t->stack_base; s < t->sp; s++)
+    for (s = t->stack_base; s < t->sp; s++) {
         if (s->kind > STACK_K_BYREF)
             return stack_fault(oh, "stack_verify: a slot's kind");
+        if (s->kind == STACK_K_BYREF && OBJECT_SPACE(s->u.byref_base) == OBJECT_SPACE_STACK
+            && (OBJECT_INDEX(s->u.byref_base) >= (uint32_t)(t->sp - t->stack_base)
+                || s->aux >= sizeof s->u))
+            return stack_fault(oh, "stack_verify: a byref past its stack's top");
+    }
     return 1;
 }
 
@@ -179,6 +197,17 @@ int stack_check(const stack_thread_t * t, uint64_t depth, uint32_t room, int kin
         return 0;
     if (depth > stack_depth(t) || room > stack_room(t)
         || (kind >= 0 && (t->sp - (size_t)depth)->kind != (uint8_t)kind))
+        return stack_fault(t->oh, where);
+    return 1;
+}
+
+int stack_check_slot(const stack_thread_t * t, uint32_t index, uint32_t offset,
+                     const char * where)
+{
+    if (!stack_live(t, where))
+        return 0;
+    if (index >= (uint32_t)(t->sp - t->stack_base) || offset >= sizeof t->sp->u
+        || t->stack_base[index].kind == STACK_K_EMPTY)
         return stack_fault(t->oh, where);
     return 1;
 }

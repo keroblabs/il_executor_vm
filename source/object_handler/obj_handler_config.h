@@ -3,7 +3,7 @@
 
 /* One configuration for MCU and host; only the debug switches differ (doc 18 section 0.2). */
 
-#define OBJECT_SPACE_COUNT          0x0014u
+#define OBJECT_SPACE_COUNT          0x0015u
 #define HEAP_SEGMENTS               1u
 #define HEAP_MAX_PAYLOAD            65536u
 

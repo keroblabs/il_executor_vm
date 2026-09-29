@@ -361,18 +361,20 @@ TEST_CASE(space_register_rejects_misuse)
     objects_space_register(&fake_oh, OBJECT_SPACE_CONST, &ok);
     objects_space_register(&fake_oh, OBJECT_SPACE_STATIC, &ok);
     objects_space_register(&fake_oh, OBJECT_SPACE_FRAME, &ok);
+    objects_space_register(&fake_oh, OBJECT_SPACE_STACK, &ok);
     objects_space_register(&fake_oh, OBJECT_SPACE_NATIVE, NULL);
     objects_space_register(&fake_oh, OBJECT_SPACE_NATIVE, &handled);
     objects_space_register(&fake_oh, OBJECT_SPACE_NATIVE, &empty);
     objects_space_register(&fake_oh, OBJECT_SPACE_NATIVE, &huge);
-    CHECK_EQ(fake_corrupt_count, 9);
+    CHECK_EQ(fake_corrupt_count, 10);
     CHECK_EQ(fake_oh.spaces[OBJECT_SPACE_NATIVE].limit, 0);
+    CHECK_EQ(fake_oh.spaces[OBJECT_SPACE_STACK].limit, 0);
 
     objects_space_register(&fake_oh, OBJECT_SPACE_NATIVE, &ok);
-    CHECK_EQ(fake_corrupt_count, 9);
+    CHECK_EQ(fake_corrupt_count, 10);
     CHECK_EQ(fake_oh.spaces[OBJECT_SPACE_NATIVE].limit, sizeof slab);
     objects_space_register(&fake_oh, OBJECT_SPACE_NATIVE, &ok);
-    CHECK_EQ(fake_corrupt_count, 10);
+    CHECK_EQ(fake_corrupt_count, 11);
 }
 
 TEST_CASE(space_register_before_init_is_ignored)

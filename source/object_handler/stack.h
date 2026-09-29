@@ -2,6 +2,7 @@
 #define STACK_H
 
 #include "objects_types.h"
+#include "objects.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -10,7 +11,7 @@ extern "C" {
 /* One call: the callee's window over its thread's value stack (doc 14 section 6.2). */
 typedef struct {
     stack_slot_t  * args;           /* this + declared parameters */
-    stack_slot_t  * locals;         /* zeroed by stack_frame_push */
+    stack_slot_t  * locals;         /* typed zeros from stack_frame_push */
     stack_slot_t  * stack;          /* evaluation stack base */
     const uint8_t * ip;             /* the VM's; never read here */
     uint16_t        method;         /* embedder method id */
@@ -37,9 +38,11 @@ int             stack_thread_init(obj_handler_t * oh, stack_thread_t * t,
                                   stack_frame_t * frames, uint32_t frame_count);
 void            stack_thread_end(stack_thread_t * t);
 
-/* NULL: the frame, its locals or its max_stack slots do not fit (StackOverflowException). */
+/* NULL: the frame, its locals or its max_stack slots do not fit (StackOverflowException).
+   local_kinds: one STACK_K_* per local, each starting as a zero of it; NULL leaves them EMPTY. */
 stack_frame_t * stack_frame_push(stack_thread_t * t, uint16_t method, uint16_t arg_slots,
-                                 uint16_t local_slots, uint16_t max_stack);
+                                 uint16_t local_slots, uint16_t max_stack,
+                                 const uint8_t * local_kinds);
 /* ret_slots 1 moves the top slot to the callee's args[0], the caller's new top. */
 void            stack_frame_pop(stack_thread_t * t, uint8_t ret_slots);
 
@@ -64,9 +67,14 @@ static inline uint32_t stack_room(const stack_thread_t * t)
 /* Library-internal: the top `depth` slots exist, `room` more fit, the deepest holds `kind`. */
 int             stack_check(const stack_thread_t * t, uint64_t depth, uint32_t room, int kind,
                             const char * where);
+/* Library-internal: slot `index` is live and typed, and `offset` falls inside its value. */
+int             stack_check_slot(const stack_thread_t * t, uint32_t index, uint32_t offset,
+                                 const char * where);
 #define STACK_CHECK(t, depth, room, kind, where)    stack_check((t), (depth), (room), (kind), (where))
+#define STACK_CHECK_SLOT(t, index, offset, where)   stack_check_slot((t), (index), (offset), (where))
 #else
 #define STACK_CHECK(t, depth, room, kind, where)    1
+#define STACK_CHECK_SLOT(t, index, offset, where)   1
 #endif
 
 /* ---- push, pop and peek; a peek's index 0 is the top ---------------- */
@@ -174,6 +182,31 @@ static inline void stack_drop(stack_thread_t * t, uint32_t n)
     if (!STACK_CHECK(t, n, 0, -1, "stack_drop"))
         return;
     t->sp -= n;
+}
+
+/* ---- byrefs to locals and arguments (doc 14 section 4.1) ------------ */
+
+/* ldloca and ldarga: a byref that only t can resolve. */
+static inline object_byref_t stack_slot_byref(const stack_thread_t * t, const stack_slot_t * slot)
+{
+    object_byref_t b;
+    const uint32_t index = (uint32_t)(slot - t->stack_base);
+
+    memset(&b, 0, sizeof b);
+    if (!STACK_CHECK_SLOT(t, index, 0, "stack_slot_byref"))
+        return b;
+    b.id = OBJECT_ID(OBJECT_SPACE_STACK, index);
+    return b;
+}
+
+/* Any byref as an address: one into t's stack through t, any other through its space. */
+static inline void * stack_byref_ptr(stack_thread_t * t, object_byref_t b)
+{
+    if (OBJECT_SPACE(b.id) != OBJECT_SPACE_STACK)
+        return objects_byref_ptr(t->oh, b);
+    if (!STACK_CHECK_SLOT(t, OBJECT_INDEX(b.id), b.offset, "stack_byref_ptr"))
+        return NULL;
+    return (uint8_t *)&t->stack_base[OBJECT_INDEX(b.id)].u + b.offset;
 }
 
 #ifdef __cplusplus

@@ -219,8 +219,8 @@ void objects_space_register(obj_handler_t * oh, uint16_t tag, const object_space
         error = "objects_space_register: library not initialised";
     else if (tag >= OBJECT_SPACE_COUNT)
         error = "objects_space_register: tag beyond OBJECT_SPACE_COUNT";
-    else if (tag < OBJECT_SPACE_NATIVE)
-        error = "objects_space_register: heap, constant, statics and frame spaces are the library's";
+    else if (tag != OBJECT_SPACE_NATIVE)
+        error = "objects_space_register: every space but the native one is the library's";
     else if (desc == NULL)
         error = "objects_space_register: desc is NULL";
     else if (desc->handles != NULL)

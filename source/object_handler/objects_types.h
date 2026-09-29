@@ -49,7 +49,8 @@ enum {
     OBJECT_SPACE_CONST  = 0x0010,
     OBJECT_SPACE_STATIC = 0x0011,
     OBJECT_SPACE_FRAME  = 0x0012,       /* reserved, unused in v1 */
-    OBJECT_SPACE_NATIVE = 0x0013
+    OBJECT_SPACE_NATIVE = 0x0013,
+    OBJECT_SPACE_STACK  = 0x0014        /* thread-relative: resolved with the thread (doc 14 section 4.1) */
 };
 
 enum {

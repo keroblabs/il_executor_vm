@@ -193,6 +193,17 @@ static stack_slot_t slot_static_byref(uint16_t field, uint16_t offset)
     return slot_byref(b);
 }
 
+/* A byref to a thread's stack slot, which has no address without the thread (doc 14 section 4.1). */
+static stack_slot_t slot_stack_byref(uint16_t slot, uint16_t offset)
+{
+    object_byref_t b;
+
+    b.id = OBJECT_ID(OBJECT_SPACE_STACK, slot);
+    b.offset = offset;
+    b._pad = 0;
+    return slot_byref(b);
+}
+
 /* A failure reads as the digits: kind a, kind b, flags, result + 1. */
 static void expect_order(stack_slot_t a, stack_slot_t b, uint32_t flags, int32_t want)
 {
@@ -324,6 +335,22 @@ TEST_CASE(compare_byrefs_by_address)
     expect_order(slot_static_byref(16, 4), slot_static_byref(20, 0), 0, VALUE_EQUAL);
     expect_order(slot_static_byref(16, 4), slot_static_byref(20, 1), 0, VALUE_LESS);
     expect_order(slot_static_byref(16, 4), slot_nint(0), 0, VALUE_UNORDERED);   /* none is null */
+    CHECK_EQ(fake_corrupt_count, 0);
+}
+
+TEST_CASE(compare_stack_byrefs_by_slot)
+{
+    stack_slot_t heap;
+
+    fake_init(PAYLOAD, HANDLES);
+    heap = slot_byref(array_element_byref(&fake_oh, array_create(&fake_oh, FAKE_T_DATA, 4, 2), 0));
+    expect_order(slot_stack_byref(3, 0), slot_stack_byref(3, 0), 0, VALUE_EQUAL);
+    expect_order(slot_stack_byref(3, 0), slot_stack_byref(3, 4), 0, VALUE_LESS);
+    expect_order(slot_stack_byref(3, 4), slot_stack_byref(4, 0), 0, VALUE_LESS);
+    expect_order(slot_stack_byref(4, 0), slot_stack_byref(3, 7), VALUE_UNSIGNED, VALUE_GREATER);
+    /* Never the same byte as a heap or static byref, and no address to order them by. */
+    expect_order(slot_stack_byref(3, 0), heap, 0, VALUE_UNORDERED);
+    expect_order(slot_static_byref(16, 0), slot_stack_byref(3, 0), 0, VALUE_UNORDERED);
     CHECK_EQ(fake_corrupt_count, 0);
 }
 
@@ -568,6 +595,7 @@ static const harness_case_t cases[] = {
     HARNESS_CASE(compare_reals_and_nan),
     HARNESS_CASE(compare_references_by_identity),
     HARNESS_CASE(compare_byrefs_by_address),
+    HARNESS_CASE(compare_stack_byrefs_by_slot),
     HARNESS_CASE(compare_empty_or_unknown_kind_is_corrupt),
     HARNESS_CASE(convert_table),
     HARNESS_CASE(convert_in_place),
