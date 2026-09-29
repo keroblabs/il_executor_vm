@@ -45,7 +45,7 @@ is what makes every item below testable without the rest of the system.
 | ~~OH-2~~ | ~~Allocator: `heap.c`, free list, `heap_release`, `heap_verify`, stats~~ | **P2** | L | OH-1 | done — `1fe5476` |
 | OH-3 | Collector: `gc.c`, roots, scopes, triggers | **P3** | L | OH-2, D5–D7 | §5 tests |
 | OH-4 | Stack: threads, slots, frames | **P4** | M | OH-3 | §6 tests |
-| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9, B6; interning with D7, the tracing test with OH-3 | §7 tests — built in `92ff6ea` and `e06439e` except the two pieces of §7 |
+| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9, B6; interning with D7, the tracing test with OH-3 | §7 tests — built in `92ff6ea`, `e06439e` and `6127ce6`; the tracing test waits for OH-3 |
 | OH-6 | Hardening: sanitizers, coverage, 32-bit release build, stats dump | **P6** | M | OH-2 onward | §8 tests |
 
 D5, D6, D7 and D9 are decisions too, but they are **not** P0: each is consumed
@@ -642,10 +642,11 @@ slot-kind pair, signed and unsigned, with `I4 5` equal to `NINT 5`; a
 `value_convert` table over every target, checked and unchecked, at each
 range bound, with NaN and the infinities.
 
-**Built (2026-09-28, `92ff6ea`; interning `e06439e`):** everything above
-except the tracing test (OH-3) and the `value_compare` matrix (OH-4). Two
-mutants — an overlong three-byte form accepted, an off-by-one range check —
-were each caught by the suite.
+**Built (2026-09-28, `92ff6ea`; interning `e06439e`; `value_compare` and
+`value_convert` 2026-09-29, `6127ce6`):** everything above except the tracing
+test (OH-3). Two mutants — an overlong three-byte form accepted, an
+off-by-one range check — were each caught by the suite, and eight more
+against `value.c` (§12).
 
 ---
 
@@ -739,6 +740,7 @@ and OH-4, not deferred.
 | Coding OH-5 (2026-09-28) | The element-refmap check in `array_create` sits under `OBJECT_DEBUG_REFS`. Reference arrays copy through the barrier element by element; everything else by `memmove`. Boxing tests live in `test_value.c`, which the §2.4 tree gains |
 | Instances (A14, 2026-09-28) | At the owner's request, before OH-3 and OH-4: every global moved into `obj_handler_t`, which every call takes first and every callback receives — 14 §1, §8. `objects_shutdown` and `obj_string_init` are gone, since shutdown zeroes the instance. `test_instances.c` runs two instances side by side, among them a seeded interleaving where one runs out of memory beside the other; a heap pointer kept inside `heap.c` fails three of its four cases. The same day the owner fixed the model: one application, one OS thread, several at once not a use case — the tests guard the no-globals rule, not a second application |
 | Value normalisation (B6, 2026-09-29) | At the owner's request the library normalises: `value_compare` orders any two slots and `value_convert` converts any number to any primitive type, and the interpreter chooses which and checks validity — 14 §1, §6.7. `stack_slot_t` is declared in `objects_types.h` now, so `value_compare` no longer waits for OH-4, and §6's test is inverted: `I4 5` equals `NINT 5`. A float out of range saturates, NaN to 0, as CoreCLR's does |
+| Coding value normalisation (2026-09-29) | Built in `6127ce6`. `test_value.c` gains 10 cases, among them the kind-pair matrix — 36 pairs, signed and unsigned — and a 108-row conversion table at every range bound, with NaN and the infinities. Eight mutants were each caught: no zero-extension for an unsigned target, −2^63 refused, signed order read as unsigned, NaN saturating to the maximum, `float32` rounded through a double, an off-by-one at a signed minimum, references compared across kinds, and the unsigned reading ignored. The sanitized build now adds `float-cast-overflow`, which GCC's `undefined` group omits. 8,463 bytes for Cortex-M4, from 7,128 |
 
 **Nothing remains open before OH-3:** A1–A13 are settled
 ([19 §4](19_Session_Checklist.md)). D5, D6, D7 and D9 (§9) are scheduled decisions, not

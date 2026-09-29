@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-29**, at commit `d682790`.
+State recorded here: **2026-09-29**, at commit `6127ce6`.
 
 ---
 
@@ -135,7 +135,7 @@ Decided. Changing one means changing the contract first.
    and standalone — the library configured on its own, which proves it
    reaches nothing in `source/`. Every case runs in its own process; a case
    that means something in one build only exits 77 and is reported as
-   skipped. Baseline: 101 cases pass, with zero warnings.
+   skipped. Baseline: 111 cases pass, with zero warnings.
 2. **Every library file on its own, through the ARM compiler** and host gcc,
    C99 and C11, debug and release switches. Baseline: zero diagnostics.
 3. **A behaviour change is proved by a case** that fails before the change
@@ -184,6 +184,10 @@ The commands are in §5.3.
 | `ce58272` | comments and test names follow the one-application model |
 | `b81ec73` | checklist: the application-model alignment |
 | `d682790` | the out-of-memory callback `on_oom` renamed `on_no_memory`; tests and docs follow |
+| `f16aa94` | checklist: the `on_no_memory` rename |
+| `c03c1f6` | doc 18: interning came with D7, so two OH-5 pieces wait, not three |
+| `928c029` | B6 decided: the library normalises, compares and converts slot values; docs 14, 18, 19 |
+| `6127ce6` | `value_compare` and `value_convert` built; `stack_slot_t` in `objects_types.h`; `float-cast-overflow` in the sanitized build |
 
 ### 3.2 Code, file by file
 
@@ -192,27 +196,30 @@ The commands are in §5.3.
 | File | Holds | Slice |
 |---|---|---|
 | `obj_handler_config.h` | the one configuration: space count, segments, `HEAP_MAX_PAYLOAD`, string encoding; the four debug switches, on unless `NDEBUG` | OH-1 |
-| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`, the constant entry `object_const_t`; the instance `obj_handler_t`, with the host callbacks and heap segments it holds; `OBJECT_LIKELY`; layout asserts | OH-1, D7, I1 |
+| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`, the stack slot `stack_slot_t` and its `STACK_K_*` kinds, the constant entry `object_const_t`; the instance `obj_handler_t`, with the host callbacks and heap segments it holds; `OBJECT_LIKELY`; layout asserts | OH-1, D7, I1, B6 |
 | `objects.c/.h` | the space table, `objects_ptr` (checked in debug) and the constant resolver, `objects_info`, registration of `NATIVE`, accessors, `objects_create`/`clone`/`promote`/`pin`/`unpin`, the identity barrier | OH-1, OH-2, D7 |
 | `obj_handler.c/.h` | the umbrella: status codes, the config struct, `obj_handler_init` on the caller's instance with its ten checks, `obj_handler_shutdown`, which zeroes it | OH-1, D7, I1 |
 | `heap.c/.h` | first fit with coalescing, bump top, handle free list with quarantine, generations, guard headers and poisoning in debug, `heap_verify`, `heap_stats` | OH-2 |
 | `gc.c/.h` | stub: `gc_request` and `gc_collect` do nothing until OH-3 | OH-2 |
 | `array.c/.h` | `array_create`, length, the one range check, element pointer and byref, overlap-safe copy through the barrier, clear | OH-5 |
 | `obj_string.c/.h` | strict UTF-8 validation, create, concat, `Length` and `char_at` in UTF-16 units, `OBJECT_H_ASCII`; `obj_string_intern` returns a constant's id | OH-5, D7 |
-| `value.c/.h` | `value_box`, `value_unbox`; `value_compare` comes with OH-4 | OH-5 |
+| `value.c/.h` | `value_box`, `value_unbox`; `value_compare` over every pair of slot kinds and `value_convert` to twelve primitive types, checked or not (14 §6.7) | OH-5, B6 |
 | `CMakeLists.txt` | target `object_handler`; configured on its own, it is the standalone build and adds the tests | OH-1 |
 
 `tests/object_handler/`: `harness.c/.h` (L1), `fake_embedder.c/.h` (L2),
 `test_objects.c` (25 cases), `test_heap.c` (29, among them two seeded 64 KB
 tortures and deliberate-damage cases that `heap_verify` must catch),
 `test_array_string.c` (21, among them a 22-row UTF-8 table),
-`test_value.c` (6), `test_spaces.c` (16: statics, constants, and one
+`test_value.c` (16, among them the kind-pair matrix and a 108-row conversion
+table), `test_spaces.c` (16: statics, constants, and one
 case per malformed slab or table entry) and `test_instances.c` (4: two
 instances side by side, among them a seeded interleaving in which one runs
 out of memory beside the other).
 
-Release build for Cortex-M4 at `-Os`: 7,128 bytes of `.text` and no `.data`
+Release build for Cortex-M4 at `-Os`: 8,463 bytes of `.text` and no `.data`
 or `.bss`; one instance is 444 bytes, and the embedder allocates it.
+`value.c` calls libgcc's soft-float helpers, which the interpreter needs for
+CIL's floating point anyway.
 Nothing carried over from the Ruffus copy except `obj_handler.h`'s status
 enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 
@@ -226,7 +233,7 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 | `12_VXB_Format.md` | **not written**; the next contract after ObjectHandler v1 |
 | [13](13_Ruffus_VM_Reuse.md) | Ruffus VM heritage; current |
 | [14](14_ObjectHandler.md) | ObjectHandler contract, normative; one false claim in §1 — B2 |
-| [15](15_Pack_Time_IL_Transforms.md) | pack-time IL transforms; current |
+| [15](15_Pack_Time_IL_Transforms.md) | pack-time IL transforms; its `conv.i`/`conv.u` fold is too broad — B7 |
 | [16](16_Native_Call_Protocol.md) | native call protocol; four items open |
 | [17](17_Threading_Model.md) | threading model; one item open |
 | [18](18_ObjectHandler_Build_Plan.md) | build plan; D1–D4, OH-1 and OH-2 struck through |
@@ -244,7 +251,7 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 | OH-T | L1, L2 and L7 done; L3, L5 and L6 in part (§4 D) |
 | OH-1 | **done** — `7ff3a8f` |
 | OH-2 | **done** — `1fe5476` |
-| OH-5 | **built** — `92ff6ea`, interning `e06439e`; `value_compare` (OH-4) and the tracing test (OH-3) wait |
+| OH-5 | **built** — `92ff6ea`, interning `e06439e`, `value_compare` and `value_convert` `6127ce6`; the tracing test (OH-3) waits |
 | Instances (A14) | **done** — decided `bed86cf`, built `d99a6ec`, model aligned `3f33e07` |
 | OH-3, OH-4, OH-6 | not started |
 
@@ -348,6 +355,11 @@ These either land in the first commit's headers or block OH-1.
   interpreter chooses the operation and checks §III.1.5 validity; `I4 5`
   equals `NINT 5`. *Recorded in:* 14 §§1, 5.7, 6.1, 6.6, 6.7, 8 and 11;
   18 §§0.1, 6, 7 and 12.
+- [ ] **B7 — 15 §5 and §11** remove `conv.i` and `conv.u` "always", because
+  `native int` is 32 bits. That holds only when the stack top is an `int32`
+  or a `native int`: from an `int64` they truncate, and from `F` they convert
+  (14 §6.7). The condition should be the stack type, as it is for `conv.i4`
+  in the same table.
 
 ### C. Build and code chores
 
@@ -403,8 +415,8 @@ These either land in the first commit's headers or block OH-1.
   thread stacks: no IL runs without them, and they are the collector's roots.
 - [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
   (18 §7), built before OH-3 and OH-4 (`92ff6ea`). D9 decided (14 §5.6);
-  `obj_string_intern` came with D7 (`e06439e`). Still open: `value_compare`
-  and `value_convert`, decided with B6 (14 §6.7), and the tracing test
+  `obj_string_intern` came with D7 (`e06439e`), and `value_compare` and
+  `value_convert` with B6 (14 §6.7, `6127ce6`). Still open: the tracing test
   (OH-3). `String.Split` stays out of `obj_string.c`: it needs the
   embedder's `string[]` type id (C6).
 - [ ] **OH-6** — hardening: sanitizers, coverage, 32-bit `-Os` build,
@@ -488,6 +500,23 @@ rm -rf "$d"
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-29, second part** — The owner settled B6 and the I4-versus-NINT
+  question in one round: the library normalises, and the interpreter
+  chooses. `value_compare` orders any two slots — integers in 64 bits,
+  signed or unsigned; an integer meets a double through the conversion;
+  references by id, byrefs by address; any other mix `VALUE_UNORDERED` — so
+  `I4 5` equals `NINT 5`. `value_convert` converts any number to twelve
+  primitive types, checked or not, per Table III.8; a float out of range
+  saturates, NaN to 0, as CoreCLR does. Doc 18's stale interning text was
+  fixed first (`c03c1f6`), the decision went into 14 §§1 and 6.7 and
+  18 §§6–7 (`928c029`), and the code followed (`6127ce6`), with
+  `stack_slot_t` in `objects_types.h` so that it does not wait for OH-4.
+  111 cases pass in the three builds, every file compiles clean for host and
+  ARM, C99 and C11, and eight mutants were caught. GCC's `undefined`
+  sanitizer misses an out-of-range float cast, so the sanitized build adds
+  `float-cast-overflow`. 8,463 bytes for Cortex-M4, from 7,128. New finding:
+  B7.
 
 - **2026-09-29** — At the owner's request the out-of-memory callback
   `on_oom` is now `on_no_memory`, and every test name built on it follows
