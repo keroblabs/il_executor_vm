@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-29**, at commit `602cb7c`.
+State recorded here: **2026-09-29**, at commit `2663ca2`.
 
 ---
 
@@ -80,6 +80,7 @@ Decided. Changing one means changing the contract first.
 | Arrays | one-dimensional, inline elements, fixed length; the type's refmap describes one element | 14 §5.7 |
 | Stack | typed slots and overlapped frames in v1; frame scratch and the size-class recycler deferred | 14 §6.0 |
 | Managed threads | one stack each, the one state a managed thread has for itself; its record is passed to every call and the VM supplies its arrays; overflow checked once per call | 14 §6.2 |
+| Byrefs | `{id, offset}`; one to a local or an argument names its slot in the thread-relative `OBJECT_SPACE_STACK` and is resolved with the thread; locals and arguments hold their declared type's storage form | 14 §4, §4.1 |
 | Collector | tricolour mark-sweep, precise, non-moving in v1; a 75 % threshold sets a flag, and a failed allocation collects at once | 14 §7 |
 | Init failures | `obj_handler_status_t`, from `obj_handler_init` only; after init, embedder bugs go to `on_corrupt`, which always returns | 14 §9.2 |
 | Allocation failure | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, `on_no_memory` | 14 §5.2 |
@@ -136,7 +137,7 @@ Decided. Changing one means changing the contract first.
    and standalone — the library configured on its own, which proves it
    reaches nothing in `source/`. Every case runs in its own process; a case
    that means something in one build only exits 77 and is reported as
-   skipped. Baseline: 129 cases pass, with zero warnings.
+   skipped. Baseline: 135 cases pass, with zero warnings.
 2. **Every library file on its own, through the ARM compiler** and host gcc,
    C99 and C11, debug and release switches. Baseline: zero diagnostics.
 3. **A behaviour change is proved by a case** that fails before the change
@@ -192,6 +193,9 @@ The commands are in §5.3.
 | `1840093` | value normalisation: coding decisions folded into docs 14 and 18; checklist and B7 |
 | `a2e2761` | OH-4 decided: one stack per managed thread, passed to every call; `stack_mem` leaves the config; docs 14, 17, 18, 19; B8 and the RPL plan |
 | `602cb7c` | OH-4 built: `stack.c/.h`, the scanner registered with `gc.c`, `stack_verify`; `test_stack.c` |
+| `81806a1` | OH-4: coding decisions folded into docs 14 and 18; checklist |
+| `a0e0d5a` | B8 decided: byrefs to locals in the thread-relative `OBJECT_SPACE_STACK`; locals typed from entry; storage form; docs 11, 14, 16, 18, 19; B9 |
+| `2663ca2` | B8 built: `stack_slot_byref`, `stack_byref_ptr`, `local_kinds`; stack byrefs in `value_compare` and `stack_verify` |
 
 ### 3.2 Code, file by file
 
@@ -200,31 +204,32 @@ The commands are in §5.3.
 | File | Holds | Slice |
 |---|---|---|
 | `obj_handler_config.h` | the one configuration: space count, segments, `HEAP_MAX_PAYLOAD`, string encoding; the five debug switches, on unless `NDEBUG` | OH-1, OH-4 |
-| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`, the stack slot `stack_slot_t` and its `STACK_K_*` kinds, the constant entry `object_const_t`; the collector's visitor and scan types; the instance `obj_handler_t`, with the host callbacks, heap segments, thread ring and registered scan it holds; `OBJECT_LIKELY`; layout asserts | OH-1, D7, I1, B6, OH-4 |
+| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, among them the thread-relative `STACK`, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`, the stack slot `stack_slot_t` and its `STACK_K_*` kinds, the constant entry `object_const_t`; the collector's visitor and scan types; the instance `obj_handler_t`, with the host callbacks, heap segments, thread ring and registered scan it holds; `OBJECT_LIKELY`; layout asserts | OH-1, D7, I1, B6, OH-4, B8 |
 | `objects.c/.h` | the space table, `objects_ptr` (checked in debug) and the constant resolver, `objects_info`, registration of `NATIVE`, accessors, `objects_create`/`clone`/`promote`/`pin`/`unpin`, the identity barrier | OH-1, OH-2, D7 |
 | `obj_handler.c/.h` | the umbrella: status codes, the config struct, `obj_handler_init` on the caller's instance with its ten checks, `obj_handler_shutdown`, which zeroes it | OH-1, D7, I1 |
 | `heap.c/.h` | first fit with coalescing, bump top, handle free list with quarantine, generations, guard headers and poisoning in debug, `heap_verify`, `heap_stats` | OH-2 |
 | `gc.c/.h` | stub: `gc_request` and `gc_collect` do nothing until OH-3; `gc_register_root_scan` keeps the stack's scanner (A7) | OH-2, OH-4 |
-| `stack.c/.h` | `stack_thread_t` and `stack_frame_t`; `stack_thread_init` on the VM's record and arrays, `stack_thread_end`; inline push, pop and peek per slot kind and whole slot, `dup`, `drop`, `depth`, `room`, checked under `STACK_DEBUG`; `stack_frame_push`/`pop` with overlapped arguments and one overflow check per call; `stack_scan_roots`; `stack_verify` | OH-4 |
+| `stack.c/.h` | `stack_thread_t` and `stack_frame_t`; `stack_thread_init` on the VM's record and arrays, `stack_thread_end`; inline push, pop and peek per slot kind and whole slot, `dup`, `drop`, `depth`, `room`, checked under `STACK_DEBUG`; `stack_frame_push`/`pop` with overlapped arguments, typed locals and one overflow check per call; `stack_slot_byref` and `stack_byref_ptr`; `stack_scan_roots`; `stack_verify` | OH-4, B8 |
 | `array.c/.h` | `array_create`, length, the one range check, element pointer and byref, overlap-safe copy through the barrier, clear | OH-5 |
 | `obj_string.c/.h` | strict UTF-8 validation, create, concat, `Length` and `char_at` in UTF-16 units, `OBJECT_H_ASCII`; `obj_string_intern` returns a constant's id | OH-5, D7 |
-| `value.c/.h` | `value_box`, `value_unbox`; `value_compare` over every pair of slot kinds and `value_convert` to twelve primitive types, checked or not (14 §6.7) | OH-5, B6 |
+| `value.c/.h` | `value_box`, `value_unbox`; `value_compare` over every pair of slot kinds, stack byrefs by slot, and `value_convert` to twelve primitive types, checked or not (14 §6.7) | OH-5, B6, B8 |
 | `CMakeLists.txt` | target `object_handler`; configured on its own, it is the standalone build and adds the tests | OH-1 |
 
 `tests/object_handler/`: `harness.c/.h` (L1), `fake_embedder.c/.h` (L2),
 `test_objects.c` (25 cases), `test_heap.c` (29, among them two seeded 64 KB
 tortures and deliberate-damage cases that `heap_verify` must catch),
 `test_array_string.c` (21, among them a 22-row UTF-8 table),
-`test_value.c` (16, among them the kind-pair matrix and a 108-row conversion
+`test_value.c` (17, among them the kind-pair matrix and a 108-row conversion
 table), `test_spaces.c` (16: statics, constants, and one
 case per malformed slab or table entry), `test_instances.c` (5: two
 instances side by side, among them a seeded interleaving in which one runs
-out of memory beside the other) and `test_stack.c` (17: frames, recursion to
+out of memory beside the other) and `test_stack.c` (22: frames, recursion to
 both limits, a look-alike `int32` the scanner must skip, two threads
-switched by passing the record, and damage `stack_verify` must catch).
+switched by passing the record, `out` arguments written into the caller's
+locals, and damage `stack_verify` must catch).
 
-Release build for Cortex-M4 at `-Os`: 9,749 bytes of `.text` and no `.data`
-or `.bss`; one instance is 452 bytes, and the embedder allocates it, as the
+Release build for Cortex-M4 at `-Os`: 9,978 bytes of `.text` and no `.data`
+or `.bss`; one instance is 468 bytes, and the embedder allocates it, as the
 VM does each thread's 40-byte record and its arrays.
 `value.c` calls libgcc's soft-float helpers, which the interpreter needs for
 CIL's floating point anyway.
@@ -241,7 +246,7 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 | `12_VXB_Format.md` | **not written**; the next contract after ObjectHandler v1 |
 | [13](13_Ruffus_VM_Reuse.md) | Ruffus VM heritage; current |
 | [14](14_ObjectHandler.md) | ObjectHandler contract, normative; one false claim in §1 — B2 |
-| [15](15_Pack_Time_IL_Transforms.md) | pack-time IL transforms; its `conv.i`/`conv.u` fold is too broad — B7 |
+| [15](15_Pack_Time_IL_Transforms.md) | pack-time IL transforms; its `conv.i`/`conv.u` fold is too broad — B7; the storage-form transforms are missing — B9 |
 | [16](16_Native_Call_Protocol.md) | native call protocol; four items open |
 | [17](17_Threading_Model.md) | threading model; one item open |
 | [18](18_ObjectHandler_Build_Plan.md) | build plan; D1–D4, OH-1 and OH-2 struck through |
@@ -382,7 +387,7 @@ These either land in the first commit's headers or block OH-1.
   the frame's entry through `local_kinds`; and a local or argument holds its
   declared type's storage form, so a byref to it behaves like a byref to a
   field. *Recorded in:* 14 §§3.1, 3.3, 4.1, 6.1, 6.2, 6.7, 8 and 11; 11 §5;
-  16 §4.1; 18 §12. Follow-ups: B9, and doc 12 in E.
+  16 §4.1; 18 §12. *Built* (`2663ca2`). Follow-ups: B9, and doc 12 in E.
 - [ ] **B9 — Doc 15 and the storage form** (14 §4.1). `cli_pack` must emit
   each method's local kinds, and the loads and stores of short-integer and
   `float32` locals and arguments must widen and narrow: typed forms of
@@ -559,6 +564,23 @@ rm -rf "$d"
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-29, fourth part** — B8 solved. A byref to a local or an
+  argument needs to say which thread's stack it points into, and the space
+  table has one entry per space. A property of CIL makes that unnecessary: a
+  managed pointer never leaves its thread, so the thread that dereferences
+  it is always the one whose stack it names. Three decisions, accepted as
+  recommended (`a0e0d5a`): the thread-relative space `OBJECT_SPACE_STACK`,
+  resolved by `stack_byref_ptr(t, b)`; locals typed from the frame's entry
+  through `local_kinds`, so a store through a byref never hides an id from
+  the collector; and locals and arguments in their declared type's storage
+  form, so a byref to one behaves like a byref to a field. Built
+  (`2663ca2`): `objects_space_register` had to be tightened, since its old
+  test would have let the new tag through. 135 cases pass in the three
+  builds; every file compiles clean for host and ARM, C99 and C11; twelve
+  mutants were caught. 9,978 bytes for Cortex-M4; the instance is 468 bytes.
+  New finding: B9, the transforms doc 15 must gain; and doc 12 must carry
+  each method's local kinds.
 
 - **2026-09-29, third part** — The owner asked what OH-4 lacked, then set
   the model the stack follows. The application — its heap, statics and
