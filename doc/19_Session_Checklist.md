@@ -371,13 +371,24 @@ These either land in the first commit's headers or block OH-1.
   or a `native int`: from an `int64` they truncate, and from `F` they convert
   (14 §6.7). The condition should be the stack type, as it is for `conv.i4`
   in the same table.
-- [ ] **B8 — A byref to a local or an argument** *(open)*. 11 §5 and 14 §4
-  say a byref can designate a frame slot, but v1 has no id for one:
+- [x] **B8 — A byref to a local or an argument.** 11 §5 and 14 §4
+  said a byref can designate a frame slot, but v1 had no id for one:
   `OBJECT_SPACE_FRAME` is tier 2's scratch arena, and a slot belongs to one
-  thread's stack, which the space table cannot tell apart. Decide before
-  `cli_exec` implements `ldloca` and `ldarga`. OH-4 does not wait: its
-  scanner reports every byref base, and skipping those that are not heap
-  ids is the collector's job (14 §7.4).
+  thread's stack, which the space table cannot tell apart. *Decided
+  2026-09-29, all three as recommended:* a thread-relative space,
+  `OBJECT_SPACE_STACK`, whose index is the slot in the holding thread's
+  value stack and which `stack_byref_ptr(t, b)` resolves with the thread —
+  sound because a managed pointer never leaves its thread; locals typed from
+  the frame's entry through `local_kinds`; and a local or argument holds its
+  declared type's storage form, so a byref to it behaves like a byref to a
+  field. *Recorded in:* 14 §§3.1, 3.3, 4.1, 6.1, 6.2, 6.7, 8 and 11; 11 §5;
+  16 §4.1; 18 §12. Follow-ups: B9, and doc 12 in E.
+- [ ] **B9 — Doc 15 and the storage form** (14 §4.1). `cli_pack` must emit
+  each method's local kinds, and the loads and stores of short-integer and
+  `float32` locals and arguments must widen and narrow: typed forms of
+  `ldloc`, `stloc`, `ldarg` and `starg` — or a per-method type table the
+  interpreter reads — and a `call` that narrows `float32` arguments. Doc 15
+  has no such transform yet.
 
 ### C. Build and code chores
 
@@ -477,8 +488,9 @@ These either land in the first commit's headers or block OH-1.
 - Generational collection (11 §7.7).
 - The four open items in doc 16 and `Thread.Interrupt` semantics (17 §11).
 - `12_VXB_Format.md`, the next contract after ObjectHandler v1
-  (00 §7.1): it must carry the constant table of 14 §3.5 and the statics
-  fix-up list of 15 §5.1. `09_Native_BCL_Bridge.md` comes before the first
+  (00 §7.1): it must carry the constant table of 14 §3.5, the statics
+  fix-up list of 15 §5.1, and each method's local kinds (14 §6.2).
+  `09_Native_BCL_Bridge.md` comes before the first
   intrinsic. Number
   formatting and parsing are natives there, written new: Ruffus's `strings.c`
   prints `0` as an empty string and `3.25` as `3`, and parses `"-5"` as 0.

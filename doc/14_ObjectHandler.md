@@ -297,7 +297,8 @@ then widen** — not design for a heap size no image has yet asked for.
 | `0x0011` | `OBJECT_SPACE_STATIC` | immortal | byte offset in the statics slab | no — **root** | yes |
 | `0x0012` | `OBJECT_SPACE_FRAME` | scoped | byte offset in a thread stack region | no — **root**, LIFO | yes |
 | `0x0013` | `OBJECT_SPACE_NATIVE` | foreign | native descriptor index | no | per descriptor |
-| `0x0014`–`0x00FF` | reserved | — | — | — | — |
+| `0x0014` | `OBJECT_SPACE_STACK` | thread-relative | slot in the value stack of the thread that holds the id (§4.1) | no — **root** | yes |
+| `0x0015`–`0x00FF` | reserved | — | — | — | — |
 | `0x0100`–`0xFFFF` | embedder-defined | — | — | — | — |
 
 The embedder range is what makes the library reusable: a project with, say,
@@ -308,6 +309,13 @@ ObjectHandler a resolver, and every reference to it works through the same
 `OBJECT_SPACE_FRAME` is **reserved and unused in v1** — the frame scratch
 arena is tier 2 and is deferred (§6). It keeps its tag from the first commit
 so that enabling it later renumbers nothing.
+
+`OBJECT_SPACE_STACK` is **thread-relative** (B8): its index names a slot in
+one managed thread's value stack, which a table with one entry per space
+cannot say. Its entry stays empty, so `objects_ptr` sends such an id to
+`on_corrupt`; `stack_byref_ptr`, which is given the thread, resolves it
+(§4.1). Tier 2's `OBJECT_SPACE_FRAME` ids are per-thread as well, and §6.3
+will have to resolve them the same way.
 
 ### 3.2 Handle slot
 
@@ -398,7 +406,7 @@ the inline path (§3.5). The
 is unchanged and is what keeps this off the critical path.
 
 `OBJECT_SPACE_COUNT` is a compile-time profile constant. An MCU build sets it
-to `0x0014`, so an instance's space table is 20 records — 320 bytes — and the
+to `0x0015`, so an instance's space table is 21 records — 336 bytes — and the
 embedder range costs nothing.
 
 ### 3.4 Debug resolution
@@ -501,7 +509,8 @@ typedef struct {
 ```
 
 A single `STACK_K_BYREF` slot kind replaces three. `objects_byref_ptr()` is
-`objects_ptr(b.id) + b.offset`, uniformly, for all regions.
+`objects_ptr(b.id) + b.offset`, uniformly, for every region but a thread's
+stack (§4.1).
 
 `offset` is 16 bits because a v1 object is (§2.3). When the payload widens,
 the offset widens with it and moves out of `stack_slot_t.aux` (§6.1) into the
@@ -510,6 +519,49 @@ union, which is 8 bytes either way — so the slot does not grow.
 Managed pointers remain forbidden in object fields, static fields and array
 elements, per ECMA-335. The collector depends on that: reference bitmaps
 describe `object_id_t` only.
+
+### 4.1 A byref to a local or an argument (B8)
+
+`ldloca` and `ldarga` point into a stack slot, and a slot belongs to one
+managed thread's value stack (§6.2). The space table has one entry per
+space, not one per thread, so no space could say *which* stack. A property
+of CIL solves it: **a managed pointer never leaves its thread.** It cannot be
+stored in a field, a static or an array element (above); a verifiable method
+cannot return one to its own locals or arguments; and a thread starts from a
+delegate, which cannot capture one. So a byref to a slot is only ever used by
+the thread whose stack holds the slot, and the interpreter always has that
+thread's record in hand.
+
+Decided 2026-09-29:
+
+- **A thread-relative space, `OBJECT_SPACE_STACK` (§3.1).** The id's index is
+  the slot's position in the value stack of the thread that holds the byref,
+  and the offset is a byte offset into that slot's value. `stack_slot_byref(t,
+  slot)` makes one for `ldloca` and `ldarga`; `stack_byref_ptr(t, b)` resolves
+  any byref — one into the stack through `t`, every other one through
+  `objects_byref_ptr`. The interpreter uses it for every indirect access, and
+  a native resolves a byref argument through its `exec_thread_t`
+  ([16 §4.1](16_Native_Call_Protocol.md)). The index is 16 bits, so a thread
+  has at most 65536 slots. Two stack byrefs compare by slot and offset, and a
+  stack byref and any other byref are unordered (§6.7).
+- **The collector passes over it.** The space is not collected, and the slot
+  it designates is scanned as a root already.
+- **Locals are typed from the frame's entry.** `stack_frame_push` takes each
+  local's slot kind, which `cli_pack` emits per method (§6.2). A store
+  through a byref writes the value and not the kind, so into an `EMPTY` local
+  it would hide an id from the collector.
+- **A local or an argument holds its declared type's storage form**, as a
+  field would: the type's bytes at the start of the slot's value,
+  little-endian. `int8` to `uint16`, `bool` and `char` fill the low bytes of
+  an `I4` slot, and a `float32` is a single in the low four bytes of an `R8`
+  slot; every other type is stored as the evaluation stack holds it.
+  ECMA-335 treats locals and arguments as locations of their declared type
+  (§III.1.1.1), so `ldloc` and `ldarg` widen, `stloc` and `starg` narrow,
+  and `call` narrows each argument to its parameter's type. A byref to a
+  local then behaves exactly like a byref to a field: `ldind` and `stind`
+  move raw bytes wherever the byref points, a reference still passing through
+  `objects_write_ref`. The widening load is needed in any case, because
+  `stind.i1` cannot tell `int8` from `uint8`.
 
 ---
 
@@ -920,6 +972,10 @@ The tag is not overhead. It is what makes the collector precise over the
 stack with no stack maps — the structural advantage an interpreter has over a
 JIT.
 
+A slot that is a local or an argument is a *location* of its declared type:
+it holds that type's storage form, which differs from the stack form only
+for the short integers and `float32` (§4.1).
+
 ### 6.2 Tier 1 — one contiguous stack, frames overlaid, arguments not copied
 
 Ruffus already keeps `stack`, `sp`, `stack_base` and `locals` as four
@@ -941,7 +997,7 @@ to `stack_thread_init`; `stack_thread_end` takes the thread off the ring
 ```c
 typedef struct {
     stack_slot_t  * args;           /* this + declared parameters           */
-    stack_slot_t  * locals;         /* zeroed by the push                   */
+    stack_slot_t  * locals;         /* typed zeros from the push            */
     stack_slot_t  * stack;          /* evaluation stack base                */
     const uint8_t * ip;             /* the VM's; never read by the library  */
     uint16_t        method;         /* embedder method id                   */
@@ -964,14 +1020,17 @@ The point of the arrangement is that **a call copies nothing**:
           [ args | locals | eval ... ]
 ```
 
-`stack_frame_push` sets `callee->args = caller->sp - arg_slots`, zeroes the
-locals and bumps past them to `stack`. `stack_frame_pop(t, ret_slots)`
-moves the return value into `callee->args[0]` and sets
-`caller->sp = callee->args + ret_slots`, `ret_slots` being 0 or 1. Argument
-passing costs two pointer arithmetic operations regardless of argument count,
-and the evaluation stack of the caller *is* the argument area of the callee.
-A zeroed slot is `STACK_K_EMPTY`, so a stale id left by a deeper call that
-has returned is never scanned as a root.
+`stack_frame_push` sets `callee->args = caller->sp - arg_slots`, makes each
+local a zero of the kind `local_kinds` gives it — `NULL` leaves them `EMPTY`,
+for a stack used without CIL — and bumps past them to `stack`.
+`stack_frame_pop(t, ret_slots)` moves the return value into
+`callee->args[0]` and sets `caller->sp = callee->args + ret_slots`,
+`ret_slots` being 0 or 1. Argument passing costs two pointer arithmetic
+operations regardless of argument count, and the evaluation stack of the
+caller *is* the argument area of the callee. A fresh local is a zero of its
+kind — a `REF` local holds `OBJECT_NULL` — so a stale id left by a deeper
+call that has returned is never scanned as a root, and `ldloc` of a local
+never stored pushes a typed zero (§4.1).
 
 Two consequences worth stating, because they are easy to lose later:
 
@@ -1164,7 +1223,7 @@ a common form and orders them:
 | an integer and an `R8` | the integer as `value_convert` to `VALUE_T_FLOAT64` makes it | IEEE: `-0.0` equals `+0.0`, and a NaN is `VALUE_UNORDERED` |
 | two `R8` | double | the same |
 | two `REF` | the id | `OBJECT_NULL` below every object |
-| two `BYREF` | the address each designates (§4) | unsigned; equal when both designate the same byte |
+| two `BYREF` | the address each designates (§4); for two stack byrefs, their slot and offset (§4.1) | unsigned; equal when both designate the same byte. A stack byref and any other byref are `VALUE_UNORDERED`: they never designate the same byte, and without the thread there is no address to order |
 | any other pair | none | `VALUE_UNORDERED` |
 
 So `I4 5` equals `NINT 5`: the kinds stay distinct (§6.1), and their values
@@ -1413,12 +1472,14 @@ int              stack_thread_init(obj_handler_t * oh, stack_thread_t * t,
 void             stack_thread_end(stack_thread_t * t);
 stack_frame_t  * stack_frame_push(stack_thread_t * t, uint16_t method,
                                   uint16_t arg_slots, uint16_t local_slots,
-                                  uint16_t max_stack);   /* NULL: overflow */
+                                  uint16_t max_stack,
+                                  const uint8_t * local_kinds); /* NULL: overflow */
 void             stack_frame_pop(stack_thread_t * t, uint8_t ret_slots);
 void             stack_scan_roots(obj_handler_t * oh, gc_visit_fn visit);
 int              stack_verify(obj_handler_t * oh);
 /* static inline in stack.h: push, pop and peek per slot kind and for a
-   whole slot; stack_dup, stack_drop, stack_depth, stack_room            */
+   whole slot; stack_dup, stack_drop, stack_depth, stack_room;
+   stack_slot_byref and stack_byref_ptr for byrefs to slots (§4.1)      */
 
 /* ---- array.h / obj_string.h / value.h : typed constructors ----------- */
 object_id_t array_create(obj_handler_t * oh, uint16_t type, uint16_t elem_size,
@@ -1663,6 +1724,7 @@ The limits behind the codes:
 | Coding value normalisation (2026-09-29) | `VALUE_T_*` start at 1, so a zeroed target is refused: 0, `VALUE_T_COUNT` and above go to `on_corrupt`. `value_convert` builds its result in a zeroed slot — `flags` and `aux` 0 — and writes `dst` only when it returns 1. Integers are read and narrowed as 64-bit patterns, with no implementation-defined conversion. The sanitized debug build adds `float-cast-overflow`, which GCC's `undefined` group leaves out, so a double cast out of range cannot pass unnoticed — §6.7 |
 | Stack (OH-4, 2026-09-29) | [19](19_Session_Checklist.md) OH-4, accepted as recommended, built before OH-3. The record is `stack_thread_t`, passed to every per-thread call: no current-thread pointer anywhere. The VM supplies each thread's slot and frame arrays and ends a thread with `stack_thread_end`, so `stack_mem` leaves the config. Overflow is checked once per call in every build, per push and pop in debug; `stack_room` serves frameless use. From Ruffus's API come push, pop and peek per slot kind, `dup`, `drop` and `depth` — not `stack_scanf`, `stack_push_string` or `stack_dump`. The tier-2 hooks leave the API, the frame counts are 16-bit, and `stack_frame_pop` takes `ret_slots`. A registered scanner reaches the stacks (A7) — §6.2, §7.4, §8, §9 |
 | Coding the stack (OH-4, 2026-09-29) | `stack_thread_init` takes a record zeroed, as static storage is, or ended, and refuses a live one, as init refuses a ready instance; `stack_thread_end` keeps the record's instance, so a later misuse is still reported. A frame carries its `max_stack`, which bounds a debug push and is what `stack_room` reports inside a frame. `stack_frame_push` sends a call with fewer slots than arguments to `on_corrupt`. The per-push checks sit under a fifth debug switch, `STACK_DEBUG`, and go through one library-internal `stack_check`; a peek index is checked in 64 bits, so `0xFFFFFFFF` cannot wrap to the top. `stack_scan_roots` skips `OBJECT_NULL` and reports ids of every space. `stack_verify` checks each thread's record, each frame's window against its caller's, `sp` on a slot boundary within the top frame's `max_stack`, and every live slot's kind. On Cortex-M4 a thread record is 40 bytes, a frame 20, and the instance 452, from 444 — §6.2, §7.4, §9 |
+| Byrefs to locals (B8, 2026-09-29) | [19](19_Session_Checklist.md) B8, accepted as recommended. A byref to a local or an argument lives in the thread-relative space `OBJECT_SPACE_STACK`: its index is the slot in the holding thread's value stack, and `stack_byref_ptr(t, b)` resolves it with the thread — sound because a managed pointer never leaves its thread. Locals are typed from the frame's entry: `stack_frame_push` takes `local_kinds`. A local or an argument holds its declared type's storage form, so `ldloc`, `ldarg` and `call` widen and narrow, and a byref to a local behaves like a byref to a field — §3.1, §4.1, §6.2, §6.7 |
 
 **Still open:**
 

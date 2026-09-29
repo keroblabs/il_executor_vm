@@ -180,6 +180,11 @@ This also makes the GC contract trivial: the window is part of the thread's
 stack, which is a root, so **arguments are rooted for the whole call with no
 registration** ([11_Memory_Model.md §8.1](11_Memory_Model.md)).
 
+A byref argument — an `out` or `ref` parameter — may point into a slot of
+the calling thread's stack, so the thunk resolves it with
+`stack_byref_ptr(&t->ctx, b)`, never with `objects_byref_ptr`
+([14 §4.1](14_ObjectHandler.md)).
+
 ### 4.2 Return values
 
 The result is written to `argv[0]` — the first argument slot — and `sp` is

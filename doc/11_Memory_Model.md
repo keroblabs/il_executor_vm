@@ -299,7 +299,9 @@ instead of three.
 A byref into a heap object keeps its target alive and survives compaction
 unchanged, because an object id is what is stored. Byrefs into statics and
 frames point at regions that are already scanned as roots, so they impose no
-additional liveness obligation.
+additional liveness obligation. A byref to a local or an argument names its
+slot in the thread-relative space `OBJECT_SPACE_STACK` and is resolved with
+the thread ([14 §4.1](14_ObjectHandler.md)).
 
 Managed pointers are **not** permitted in object fields, static fields or
 array elements — ECMA-335 restricts them to locals, arguments and return
