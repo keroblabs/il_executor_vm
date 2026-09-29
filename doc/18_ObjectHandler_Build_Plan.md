@@ -44,7 +44,7 @@ is what makes every item below testable without the rest of the system.
 | ~~OH-1~~ | ~~Foundation: types, config, spaces, resolution, build~~ | **P1** | M | D1–D4, OH-T L1–L2 | done — `7ff3a8f` |
 | ~~OH-2~~ | ~~Allocator: `heap.c`, free list, `heap_release`, `heap_verify`, stats~~ | **P2** | L | OH-1 | done — `1fe5476` |
 | OH-3 | Collector: `gc.c`, roots, scopes, triggers | **P3** | L | OH-2, D5–D7 | §5 tests |
-| OH-4 | Stack: threads, slots, frames | **P4** | M | OH-2; the collect-and-keep tests with OH-3 | §6 tests |
+| OH-4 | Stack: threads, slots, frames | **P4** | M | OH-2; the collect-and-keep tests with OH-3 | §6 tests — built in `602cb7c`; the collect-and-keep tests wait for OH-3 |
 | OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9, B6; interning with D7, the tracing test with OH-3 | §7 tests — built in `92ff6ea`, `e06439e` and `6127ce6`; the tracing test waits for OH-3 |
 | OH-6 | Hardening: sanitizers, coverage, 32-bit release build, stats dump | **P6** | M | OH-2 onward | §8 tests |
 
@@ -595,6 +595,12 @@ now, through a recording visitor (14 §7.4).
   slots, and an ended thread is no longer scanned;
 - `stack_verify` catches deliberate damage.
 
+**Built (2026-09-29, `602cb7c`):** everything above except the halves that
+need a collector — the look-alike `int32` collected, the byref base kept —
+which come with OH-3. The scanner halves pass through a recording visitor.
+`test_stack.c` has 17 cases and `test_instances.c` one more; fifteen mutants
+were each caught (§12).
+
 **Risk:** conflating `STACK_K_NINT` and `STACK_K_I4`. They are distinct kinds
 even though both are 32-bit (14 §6.1), and a conversion keeps them apart:
 `value_convert` to `VALUE_T_NATIVE_INT` yields `NINT`. Their values are not
@@ -758,6 +764,7 @@ and OH-4, not deferred.
 | Value normalisation (B6, 2026-09-29) | At the owner's request the library normalises: `value_compare` orders any two slots and `value_convert` converts any number to any primitive type, and the interpreter chooses which and checks validity — 14 §1, §6.7. `stack_slot_t` is declared in `objects_types.h` now, so `value_compare` no longer waits for OH-4, and §6's test is inverted: `I4 5` equals `NINT 5`. A float out of range saturates, NaN to 0, as CoreCLR's does |
 | Coding value normalisation (2026-09-29) | Built in `6127ce6`. `test_value.c` gains 10 cases, among them the kind-pair matrix — 36 pairs, signed and unsigned — and a 108-row conversion table at every range bound, with NaN and the infinities. Eight mutants were each caught: no zero-extension for an unsigned target, −2^63 refused, signed order read as unsigned, NaN saturating to the maximum, `float32` rounded through a double, an off-by-one at a signed minimum, references compared across kinds, and the unsigned reading ignored. The sanitized build now adds `float-cast-overflow`, which GCC's `undefined` group omits. 8,463 bytes for Cortex-M4, from 7,128 |
 | Stack (OH-4, 2026-09-29) | At the owner's request OH-4 is built before OH-3, one stack per managed thread, with the eight recommendations of [19](19_Session_Checklist.md) OH-4 accepted: the record passed to every call, the VM's arrays per thread, one overflow check per call, Ruffus's push/pop/peek shape over typed slots, no tier-2 hooks, 16-bit frame counts, a registered scanner — 14 §6.2, §7.4, §8, §9, §11. The region carve-up of §6's first draft is gone with `stack_mem` |
+| Coding the stack (OH-4, 2026-09-29) | Built in `602cb7c`. `STACK_DEBUG` is a fifth debug switch, beside the four of §3. `test_stack.c` has 17 cases — among them a look-alike `int32` the scanner must not report, recursion to the frame limit and to the slot limit with a guard element past each array, two threads switched by passing the record, and seven kinds of deliberate damage for `stack_verify` — and `test_instances.c` gains one: each instance scans only its own threads. Fifteen mutants were each caught: locals not zeroed, an off-by-one in the room check, the frame limit ignored, no return-value move, an `int32` scanned, byrefs not scanned, slots above `sp` scanned, no unlink, no kind check, a peek index wrapping, no `max_stack` check in `stack_verify` — caught only after its test set valid kinds above `sp` — one room slot too many, arguments not counted, a live record re-initialised, and the caller's frame lost on return. 9,749 bytes for Cortex-M4, from 8,463, with no `.data` or `.bss` |
 
 **Nothing remains open before OH-3:** A1–A13 are settled
 ([19 §4](19_Session_Checklist.md)). D5, D6, D7 and D9 (§9) are scheduled decisions, not

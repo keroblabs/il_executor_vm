@@ -11,7 +11,7 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-29**, at commit `6127ce6`.
+State recorded here: **2026-09-29**, at commit `602cb7c`.
 
 ---
 
@@ -28,7 +28,7 @@ project's architecture and rewrites its details
 | `cli_pack` | host tool: reads .NET assemblies, resolves and folds everything it can, writes one `.vxb` image | parser front end done — `source/`, [Phase 0](99_phase0_work.md); the rest not started |
 | `cli_exec` | runs a `.vxb` image, on the device or the host | not started |
 | `cli_dump` | prints an image, for inspection and tests | not started |
-| **ObjectHandler** | standalone C library for objects, the heap, per-thread stacks and the collector; knows nothing about CIL | contract [14](14_ObjectHandler.md), plan [18](18_ObjectHandler_Build_Plan.md); **OH-1, OH-2, OH-5 and D7 built and tested**, all state in the application's instance; OH-3 and OH-4 deferred by the owner |
+| **ObjectHandler** | standalone C library for objects, the heap, per-thread stacks and the collector; knows nothing about CIL | contract [14](14_ObjectHandler.md), plan [18](18_ObjectHandler_Build_Plan.md); **OH-1, OH-2, OH-4, OH-5 and D7 built and tested**, all state in the application's instance, one stack per managed thread; OH-3 deferred by the owner |
 
 **Current focus: ObjectHandler v1**, built in the order of doc 18 and tested
 until it is the component nobody has to suspect. After it come the image
@@ -79,6 +79,7 @@ Decided. Changing one means changing the contract first.
 | Strings | UTF-8 payloads; `cli_pack` rejects non-ASCII literals unless `--allow-non-ascii` | 14 §5.6 |
 | Arrays | one-dimensional, inline elements, fixed length; the type's refmap describes one element | 14 §5.7 |
 | Stack | typed slots and overlapped frames in v1; frame scratch and the size-class recycler deferred | 14 §6.0 |
+| Managed threads | one stack each, the one state a managed thread has for itself; its record is passed to every call and the VM supplies its arrays; overflow checked once per call | 14 §6.2 |
 | Collector | tricolour mark-sweep, precise, non-moving in v1; a 75 % threshold sets a flag, and a failed allocation collects at once | 14 §7 |
 | Init failures | `obj_handler_status_t`, from `obj_handler_init` only; after init, embedder bugs go to `on_corrupt`, which always returns | 14 §9.2 |
 | Allocation failure | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, `on_no_memory` | 14 §5.2 |
@@ -135,7 +136,7 @@ Decided. Changing one means changing the contract first.
    and standalone — the library configured on its own, which proves it
    reaches nothing in `source/`. Every case runs in its own process; a case
    that means something in one build only exits 77 and is reported as
-   skipped. Baseline: 111 cases pass, with zero warnings.
+   skipped. Baseline: 129 cases pass, with zero warnings.
 2. **Every library file on its own, through the ARM compiler** and host gcc,
    C99 and C11, debug and release switches. Baseline: zero diagnostics.
 3. **A behaviour change is proved by a case** that fails before the change
@@ -188,6 +189,9 @@ The commands are in §5.3.
 | `c03c1f6` | doc 18: interning came with D7, so two OH-5 pieces wait, not three |
 | `928c029` | B6 decided: the library normalises, compares and converts slot values; docs 14, 18, 19 |
 | `6127ce6` | `value_compare` and `value_convert` built; `stack_slot_t` in `objects_types.h`; `float-cast-overflow` in the sanitized build |
+| `1840093` | value normalisation: coding decisions folded into docs 14 and 18; checklist and B7 |
+| `a2e2761` | OH-4 decided: one stack per managed thread, passed to every call; `stack_mem` leaves the config; docs 14, 17, 18, 19; B8 and the RPL plan |
+| `602cb7c` | OH-4 built: `stack.c/.h`, the scanner registered with `gc.c`, `stack_verify`; `test_stack.c` |
 
 ### 3.2 Code, file by file
 
@@ -195,12 +199,13 @@ The commands are in §5.3.
 
 | File | Holds | Slice |
 |---|---|---|
-| `obj_handler_config.h` | the one configuration: space count, segments, `HEAP_MAX_PAYLOAD`, string encoding; the four debug switches, on unless `NDEBUG` | OH-1 |
-| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`, the stack slot `stack_slot_t` and its `STACK_K_*` kinds, the constant entry `object_const_t`; the instance `obj_handler_t`, with the host callbacks and heap segments it holds; `OBJECT_LIKELY`; layout asserts | OH-1, D7, I1, B6 |
+| `obj_handler_config.h` | the one configuration: space count, segments, `HEAP_MAX_PAYLOAD`, string encoding; the five debug switches, on unless `NDEBUG` | OH-1, OH-4 |
+| `objects_types.h` | `object_id_t` and its macros in both splits; spaces, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`, the stack slot `stack_slot_t` and its `STACK_K_*` kinds, the constant entry `object_const_t`; the collector's visitor and scan types; the instance `obj_handler_t`, with the host callbacks, heap segments, thread ring and registered scan it holds; `OBJECT_LIKELY`; layout asserts | OH-1, D7, I1, B6, OH-4 |
 | `objects.c/.h` | the space table, `objects_ptr` (checked in debug) and the constant resolver, `objects_info`, registration of `NATIVE`, accessors, `objects_create`/`clone`/`promote`/`pin`/`unpin`, the identity barrier | OH-1, OH-2, D7 |
 | `obj_handler.c/.h` | the umbrella: status codes, the config struct, `obj_handler_init` on the caller's instance with its ten checks, `obj_handler_shutdown`, which zeroes it | OH-1, D7, I1 |
 | `heap.c/.h` | first fit with coalescing, bump top, handle free list with quarantine, generations, guard headers and poisoning in debug, `heap_verify`, `heap_stats` | OH-2 |
-| `gc.c/.h` | stub: `gc_request` and `gc_collect` do nothing until OH-3 | OH-2 |
+| `gc.c/.h` | stub: `gc_request` and `gc_collect` do nothing until OH-3; `gc_register_root_scan` keeps the stack's scanner (A7) | OH-2, OH-4 |
+| `stack.c/.h` | `stack_thread_t` and `stack_frame_t`; `stack_thread_init` on the VM's record and arrays, `stack_thread_end`; inline push, pop and peek per slot kind and whole slot, `dup`, `drop`, `depth`, `room`, checked under `STACK_DEBUG`; `stack_frame_push`/`pop` with overlapped arguments and one overflow check per call; `stack_scan_roots`; `stack_verify` | OH-4 |
 | `array.c/.h` | `array_create`, length, the one range check, element pointer and byref, overlap-safe copy through the barrier, clear | OH-5 |
 | `obj_string.c/.h` | strict UTF-8 validation, create, concat, `Length` and `char_at` in UTF-16 units, `OBJECT_H_ASCII`; `obj_string_intern` returns a constant's id | OH-5, D7 |
 | `value.c/.h` | `value_box`, `value_unbox`; `value_compare` over every pair of slot kinds and `value_convert` to twelve primitive types, checked or not (14 §6.7) | OH-5, B6 |
@@ -212,12 +217,15 @@ tortures and deliberate-damage cases that `heap_verify` must catch),
 `test_array_string.c` (21, among them a 22-row UTF-8 table),
 `test_value.c` (16, among them the kind-pair matrix and a 108-row conversion
 table), `test_spaces.c` (16: statics, constants, and one
-case per malformed slab or table entry) and `test_instances.c` (4: two
+case per malformed slab or table entry), `test_instances.c` (5: two
 instances side by side, among them a seeded interleaving in which one runs
-out of memory beside the other).
+out of memory beside the other) and `test_stack.c` (17: frames, recursion to
+both limits, a look-alike `int32` the scanner must skip, two threads
+switched by passing the record, and damage `stack_verify` must catch).
 
-Release build for Cortex-M4 at `-Os`: 8,463 bytes of `.text` and no `.data`
-or `.bss`; one instance is 444 bytes, and the embedder allocates it.
+Release build for Cortex-M4 at `-Os`: 9,749 bytes of `.text` and no `.data`
+or `.bss`; one instance is 452 bytes, and the embedder allocates it, as the
+VM does each thread's 40-byte record and its arrays.
 `value.c` calls libgcc's soft-float helpers, which the interpreter needs for
 CIL's floating point anyway.
 Nothing carried over from the Ruffus copy except `obj_handler.h`'s status
@@ -229,7 +237,7 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 |---|---|
 | [00](00_Introduction.md) | project overview and roadmap; current |
 | [10](10_Native_Assembly_Layout.md) | `Native.*` assemblies; §§4–8 deferred |
-| [11](11_Memory_Model.md) | memory policy; **contradicts 14 in six places** — B1 |
+| [11](11_Memory_Model.md) | memory policy; **contradicts 14 in seven places** — B1 |
 | `12_VXB_Format.md` | **not written**; the next contract after ObjectHandler v1 |
 | [13](13_Ruffus_VM_Reuse.md) | Ruffus VM heritage; current |
 | [14](14_ObjectHandler.md) | ObjectHandler contract, normative; one false claim in §1 — B2 |
@@ -252,8 +260,9 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 | OH-1 | **done** — `7ff3a8f` |
 | OH-2 | **done** — `1fe5476` |
 | OH-5 | **built** — `92ff6ea`, interning `e06439e`, `value_compare` and `value_convert` `6127ce6`; the tracing test (OH-3) waits |
+| OH-4 | **built** — decided `a2e2761`, built `602cb7c`; the collect-and-keep halves of two tests (OH-3) wait |
 | Instances (A14) | **done** — decided `bed86cf`, built `d99a6ec`, model aligned `3f33e07` |
-| OH-3, OH-4, OH-6 | not started |
+| OH-3, OH-6 | not started |
 
 ---
 
@@ -408,8 +417,8 @@ These either land in the first commit's headers or block OH-1.
 - [x] **D4** — the old `source/framework/` draft: C2 (`745922d`).
 - [ ] **OH-T** — test system (18 §2). Done: `harness.h` and CTest (L1), the
   fake embedder (L2), one process per case and a dump on failure (L7). In
-  part: `heap_verify` (L3 — `gc_verify` and `stack_verify` come with their
-  slices), fault injection for `on_no_memory` and corruption (L5), seeded tortures
+  part: `heap_verify` and `stack_verify` (L3 — `gc_verify` comes with OH-3),
+  fault injection for `on_no_memory` and corruption (L5), seeded tortures
   that report seed and operation (L6). Still to do: the oracle (L4, with
   OH-3), the operation log and `regressions/` (L6), and CI (L8, OH-6).
 - [x] **OH-1** — foundation: types, configuration, spaces, resolution,
@@ -434,7 +443,9 @@ These either land in the first commit's headers or block OH-1.
   `dup`, `drop` and `depth`, but not `stack_scanf`, `stack_push_string` or
   `stack_dump`; no tier-2 hooks, 16-bit frame counts, `stack_frame_pop`
   takes `ret_slots`; `stack_scan_roots` is registered with `gc.c`, the ring
-  headed in `obj_handler_t`. The collect-and-keep tests wait for OH-3.
+  headed in `obj_handler_t`. *Built* (`602cb7c`): everything in 18 §6 but
+  the collect-and-keep halves of the precision and byref tests, which wait
+  for OH-3; their scanner halves pass through a recording visitor.
 - [ ] **OH-5** — typed constructors: `array.c`, `obj_string.c`, `value.c`
   (18 §7), built before OH-3 and OH-4 (`92ff6ea`). D9 decided (14 §5.6);
   `obj_string_intern` came with D7 (`e06439e`), and `value_compare` and
@@ -536,6 +547,26 @@ rm -rf "$d"
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-09-29, third part** — The owner asked what OH-4 lacked, then set
+  the model the stack follows. The application — its heap, statics and
+  constants — runs on one OS thread; the stack is the one state each managed
+  thread has for itself, and it must keep no globals. The deferral of
+  2026-09-28 had read "thread stacks" as OS stacks. Who uses the stack: in
+  Ruffus, only `gc.c` inside ObjectHandler, while `stack.h` itself called
+  `value_type` and `strings` because every push boxed; outside it, the
+  interpreter and about 2,500 lines of natives. In the new library only the
+  collector reads stacks, and `value.c` reads single slots. Eight decisions
+  accepted as recommended and recorded in docs 14, 17, 18 and 19
+  (`a2e2761`). **OH-4 built** (`602cb7c`): the record passed to every call,
+  the VM's arrays per thread, frames overlaid with one overflow check per
+  call, Ruffus's push/pop/peek shape over typed slots, the scanner
+  registered with `gc.c`, `stack_verify`. 129 cases pass in the three
+  builds; every file compiles clean for host and ARM, C99 and C11; fifteen
+  mutants were caught, one only after its test was strengthened. 9,749 bytes
+  for Cortex-M4 with no `.bss`; the instance is 452 bytes and a thread
+  record 40. New findings: B8 (a byref to a local has no id) and a seventh B1
+  point. The RPL layer the owner described is recorded in E as a plan.
 
 - **2026-09-29, second part** — The owner settled B6 and the I4-versus-NINT
   question in one round: the library normalises, and the interpreter
