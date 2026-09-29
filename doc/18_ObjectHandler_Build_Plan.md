@@ -45,7 +45,7 @@ is what makes every item below testable without the rest of the system.
 | ~~OH-2~~ | ~~Allocator: `heap.c`, free list, `heap_release`, `heap_verify`, stats~~ | **P2** | L | OH-1 | done — `1fe5476` |
 | OH-3 | Collector: `gc.c`, roots, scopes, triggers | **P3** | L | OH-2, D5–D7 | §5 tests |
 | OH-4 | Stack: threads, slots, frames | **P4** | M | OH-3 | §6 tests |
-| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9; interning with OH-3, `value_compare` with OH-4 | §7 tests — built in `92ff6ea` except the three pieces of §7 |
+| OH-5 | Typed constructors: `array.c`, `obj_string.c`, `value.c` | **P5** | M | OH-2, D9; interning with D7, `value_compare` with OH-4 | §7 tests — built in `92ff6ea` and `e06439e` except the two pieces of §7 |
 | OH-6 | Hardening: sanitizers, coverage, 32-bit release build, stats dump | **P6** | M | OH-2 onward | §8 tests |
 
 D5, D6, D7 and D9 are decisions too, but they are **not** P0: each is consumed
@@ -593,9 +593,10 @@ equal through `value_compare` in OH-5.
 The array layout is **decided** in 14 §5.7.
 
 **Order (2026-09-28): built before OH-3 and OH-4**, at the owner's request.
-Three pieces wait for the slice they depend on: `obj_string_intern` for D7
-(OH-3), `value_compare` for `stack_slot_t` and B6's rules (OH-4), and the
-test that the collector traces an `array_create` array (OH-3).
+Two pieces wait for the slice they depend on: `value_compare` for
+`stack_slot_t` and B6's rules (OH-4), and the test that the collector traces
+an `array_create` array (OH-3). `obj_string_intern` waited for D7 and came
+with it (`e06439e`).
 
 **Work:**
 
@@ -618,8 +619,8 @@ test that the collector traces an `array_create` array (OH-3).
    shape.
 2. `obj_string.c` — UTF-8 bodies per 14 §5.6; `obj_string_create`
    *validates* its input and rejects overlong encodings, truncated sequences
-   and surrogates; the intern table comes from the config. `obj_string_length`
-   and `obj_string_char_at` count UTF-16 units (D9).
+   and surrogates; `obj_string_intern` returns a constant's id (D7, 14 §3.5).
+   `obj_string_length` and `obj_string_char_at` count UTF-16 units (D9).
 3. `value.c` — `value_box`/`value_unbox` with a size check; `value_compare`
    over slots, reimplementing Ruffus's mixed-type promotion table with no
    allocation (14 §6.6).
@@ -636,8 +637,8 @@ truncated / surrogate / empty) with an expected verdict per row; box→unbox
 round-trip for every primitive kind; a `value_compare` matrix over every
 slot-kind pair.
 
-**Built (2026-09-28, `92ff6ea`):** everything above except the tracing test
-(OH-3), the `value_compare` matrix (OH-4) and interning (OH-3, D7). Two
+**Built (2026-09-28, `92ff6ea`; interning `e06439e`):** everything above
+except the tracing test (OH-3) and the `value_compare` matrix (OH-4). Two
 mutants — an overlong three-byte form accepted, an off-by-one range check —
 were each caught by the suite.
 
