@@ -75,6 +75,12 @@ A device debug build is therefore a legitimate and useful thing — same
 configuration, instrumentation on — which is exactly what makes `heap_verify`
 runnable inside a misbehaving Ruffus (§2, L3).
 
+Since C9 (2026-10-02), these switches are library build settings, not
+defaults independently selected by each caller's `NDEBUG`. The generated
+`obj_handler_build_config.h` is shared by library and consumer, and
+conflicting overrides are rejected. CMake publishes the generated include
+directory and installs it with the public headers (14 section 1.1).
+
 ---
 
 ## 1. P0 — the four decisions in commit one
@@ -439,12 +445,14 @@ is why it is early.
    from the embedder's refmap, test the threshold and call `gc_request()`
    (a stub until OH-3).
 3. **`heap_release(object_id_t)`** — declared in `heap.h`, not hidden behind
-   the test build. Its callers are the sweep (OH-3) and the test suite, and it
+  the test build. Its callers are public deletion (C10), the sweep (OH-3)
+  and the test suite, and it
    exists in this slice so that the allocator is completely exercisable before
    a collector exists. It is reachable through `obj_handler.h`, which
-   includes every module header (14 §8), but it is not part of the
-   embedder's API: an embedder never frees, because lifetime is the
-   collector's job (14 §1).
+  includes every module header (14 §8); embedders use `objects_delete` or
+  the kind-checked `obj_string_delete`, `array_delete` and `value_delete`,
+  not the low-level release operation. Explicit deletion is non-recursive
+  and permits standalone reclamation while the collector is deferred.
    Address-ordered free-list insert, coalescing the previous and following
    blocks, handle returned to the *tail* of the free list (D2 quarantine).
 4. `heap_verify()` — the invariant checker, and the most valuable single
@@ -746,7 +754,7 @@ and OH-4, not deferred.
 | Test system | A full test system, its own P1 slice, layers 3–7 carrying the weight — §2 |
 | Layer-1 framework | **None.** CTest supplies discovery, reporting, filtering and per-case process isolation; `harness.h` supplies the assertion macros and the failure dump. No vendored dependency — §2.2 |
 | Free-list terminator | **Reserved 8-byte sentinel at payload offset 0**; `next == 0` becomes unambiguous and `offset == 0` becomes a usable "no payload" marker — §4 |
-| `heap_release` | Kept, declared in `heap.h`, **called by the GC sweep** in production and directly by tests; absent from the umbrella header because an embedder never frees — §4 |
+| `heap_release` | Kept in `heap.h` and reachable through the umbrella; shared by public deletion (C10), the future GC sweep and tests. Embedders release objects through the public delete APIs — §4, 14 §8 |
 | OH-2 before OH-3 | **Settled**, no longer open: the allocator is fully exercisable without a collector, and `heap_release` is a real API with a real caller rather than a test hook |
 | Array header | **Kept, and widened to 8 bytes** so `int64`/`double` elements stay naturally aligned; deletes `array_shape` from the host struct — now defined in 14 §5.7 |
 | Heap ids | Confirmed: **handle-table indices from v1**, never payload offsets, with no later migration — D2 and 14 §3.2 |

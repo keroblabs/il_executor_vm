@@ -406,6 +406,196 @@ TEST_CASE(alloc_misuse_is_corrupt)
 
 /* ---- objects_* on top of the heap ------------------------------------ */
 
+TEST_CASE(delete_reclaims_payload_and_handles)
+{
+    object_id_t object;
+    object_id_t empty;
+    object_id_t raw;
+    heap_stats_t before;
+    heap_stats_t after;
+
+    fake_init(PAYLOAD, HANDLES);
+    before = stats();
+    object = objects_create(&fake_oh, FAKE_T_DATA, 32);
+    empty = objects_create(&fake_oh, FAKE_T_DATA, 0);
+    raw = heap_alloc(&fake_oh, OBJECT_SPACE_HEAP, FAKE_T_DATA, OBJECT_K_RAW, 16);
+    CHECK(object != OBJECT_NULL && empty != OBJECT_NULL && raw != OBJECT_NULL);
+    objects_delete(&fake_oh, object);
+    objects_delete(&fake_oh, empty);
+    objects_delete(&fake_oh, raw);
+    after = stats();
+    CHECK_EQ(after.used_bytes, before.used_bytes);
+    CHECK_EQ(after.live_objects, before.live_objects);
+    CHECK_EQ(after.free_handles, before.free_handles);
+    CHECK_EQ(after.largest_free, before.largest_free);
+    CHECK(heap_verify(&fake_oh));
+    CHECK_EQ(fake_corrupt_count, 0);
+}
+
+TEST_CASE(delete_allows_repeated_standalone_allocations)
+{
+    uint32_t iteration;
+
+    fake_init(128, 4);
+    for (iteration = 0; iteration < 1000; iteration++) {
+        const int32_t number = (int32_t)iteration;
+        object_id_t id = objects_create(&fake_oh, FAKE_T_DATA, 32);
+
+        CHECK(id != OBJECT_NULL);
+        objects_delete(&fake_oh, id);
+        id = obj_string_create(&fake_oh, "text", 4);
+        CHECK(id != OBJECT_NULL);
+        obj_string_delete(&fake_oh, id);
+        id = array_create(&fake_oh, FAKE_T_DATA, 4, 2);
+        CHECK(id != OBJECT_NULL);
+        array_delete(&fake_oh, id);
+        id = value_box(&fake_oh, FAKE_T_DATA, &number, sizeof number);
+        CHECK(id != OBJECT_NULL);
+        value_delete(&fake_oh, id);
+        CHECK_EQ(stats().used_bytes, 0);
+        CHECK_EQ(stats().live_objects, 0);
+        CHECK_EQ(stats().free_handles, 3);
+        CHECK(heap_verify(&fake_oh));
+    }
+    CHECK_EQ(fake_no_memory_count, 0);
+    CHECK_EQ(fake_corrupt_count, 0);
+}
+
+TEST_CASE(delete_does_not_release_referenced_objects)
+{
+    object_id_t child;
+    object_id_t parent;
+    object_id_t array;
+    object_id_t box;
+
+    fake_init(PAYLOAD, HANDLES);
+    child = objects_create(&fake_oh, FAKE_T_DATA, 16);
+    parent = objects_create(&fake_oh, FAKE_T_NODE, sizeof child);
+    array = array_create(&fake_oh, FAKE_T_NODE, sizeof child, 1);
+    box = value_box(&fake_oh, FAKE_T_NODE, &child, sizeof child);
+    CHECK(child != OBJECT_NULL && parent != OBJECT_NULL
+          && array != OBJECT_NULL && box != OBJECT_NULL);
+    objects_write_ref(&fake_oh, objects_ptr(&fake_oh, parent), child);
+    objects_write_ref(&fake_oh, array_element_ptr(&fake_oh, array, 0), child);
+    objects_delete(&fake_oh, parent);
+    array_delete(&fake_oh, array);
+    value_delete(&fake_oh, box);
+    CHECK_EQ(objects_size_of(&fake_oh, child), 16);
+    CHECK_EQ(stats().live_objects, 1);
+    objects_delete(&fake_oh, child);
+    CHECK_EQ(stats().used_bytes, 0);
+    CHECK(heap_verify(&fake_oh));
+    CHECK_EQ(fake_corrupt_count, 0);
+}
+
+TEST_CASE(delete_rejects_invalid_and_already_freed_ids)
+{
+    void (*const delete_functions[])(obj_handler_t *, object_id_t) = {
+        objects_delete, obj_string_delete, array_delete, value_delete
+    };
+    const int32_t number = 42;
+    object_id_t ids[4];
+    size_t operation;
+
+    fake_init(PAYLOAD, HANDLES);
+    ids[0] = objects_create(&fake_oh, FAKE_T_DATA, 16);
+    ids[1] = obj_string_create(&fake_oh, "text", 4);
+    ids[2] = array_create(&fake_oh, FAKE_T_DATA, 4, 1);
+    ids[3] = value_box(&fake_oh, FAKE_T_DATA, &number, sizeof number);
+    fake_allow_corrupt();
+    for (operation = 0; operation < 4; operation++) {
+        CHECK(ids[operation] != OBJECT_NULL);
+        delete_functions[operation](&fake_oh, OBJECT_NULL);
+        delete_functions[operation](&fake_oh, OBJECT_ID(0xFFFFu, 1));
+        delete_functions[operation](&fake_oh, ids[operation]);
+        delete_functions[operation](&fake_oh, ids[operation]);
+    }
+    CHECK_EQ(fake_corrupt_count, 12);
+    CHECK_EQ(stats().live_objects, 0);
+    CHECK_EQ(stats().used_bytes, 0);
+    CHECK(heap_verify(&fake_oh));
+}
+
+TEST_CASE(typed_delete_rejects_wrong_kinds)
+{
+    object_id_t object;
+    uint32_t used;
+
+    fake_init(PAYLOAD, HANDLES);
+    object = objects_create(&fake_oh, FAKE_T_DATA, 16);
+    CHECK(object != OBJECT_NULL);
+    used = heap_in_use(&fake_oh);
+    fake_allow_corrupt();
+    obj_string_delete(&fake_oh, object);
+    array_delete(&fake_oh, object);
+    value_delete(&fake_oh, object);
+    CHECK_EQ(fake_corrupt_count, 3);
+    CHECK_EQ(heap_in_use(&fake_oh), used);
+    CHECK_EQ(stats().live_objects, 1);
+    CHECK_EQ(objects_size_of(&fake_oh, object), 16);
+    objects_delete(&fake_oh, object);
+    CHECK_EQ(heap_in_use(&fake_oh), 0);
+    CHECK(heap_verify(&fake_oh));
+}
+
+TEST_CASE(delete_rejects_pinned_allocations)
+{
+    void (*const delete_functions[])(obj_handler_t *, object_id_t) = {
+        objects_delete, obj_string_delete, array_delete, value_delete
+    };
+    const int32_t number = 42;
+    object_id_t ids[4];
+    uint32_t used;
+    size_t operation;
+
+    fake_init(PAYLOAD, HANDLES);
+    ids[0] = objects_create(&fake_oh, FAKE_T_DATA, 16);
+    ids[1] = obj_string_create(&fake_oh, "text", 4);
+    ids[2] = array_create(&fake_oh, FAKE_T_DATA, 4, 1);
+    ids[3] = value_box(&fake_oh, FAKE_T_DATA, &number, sizeof number);
+    for (operation = 0; operation < 4; operation++)
+        CHECK(objects_pin(&fake_oh, ids[operation]) != NULL);
+    used = heap_in_use(&fake_oh);
+    fake_allow_corrupt();
+    for (operation = 0; operation < 4; operation++)
+        delete_functions[operation](&fake_oh, ids[operation]);
+    CHECK_EQ(fake_corrupt_count, 4);
+    CHECK_EQ(stats().live_objects, 4);
+    CHECK_EQ(heap_in_use(&fake_oh), used);
+    for (operation = 0; operation < 4; operation++) {
+        objects_unpin(&fake_oh, ids[operation]);
+        delete_functions[operation](&fake_oh, ids[operation]);
+    }
+    CHECK_EQ(fake_corrupt_count, 4);
+    CHECK_EQ(heap_in_use(&fake_oh), 0);
+    CHECK(heap_verify(&fake_oh));
+}
+
+TEST_CASE(delete_rejects_stale_ids_in_debug)
+{
+#if OBJECT_DEBUG_REFS
+    object_id_t old_id;
+    object_id_t current_id;
+
+    fake_init(PAYLOAD, 2);
+    old_id = objects_create(&fake_oh, FAKE_T_DATA, 16);
+    objects_delete(&fake_oh, old_id);
+    current_id = objects_create(&fake_oh, FAKE_T_DATA, 16);
+    CHECK_EQ(OBJECT_INDEX(current_id), OBJECT_INDEX(old_id));
+    CHECK(current_id != old_id);
+    fake_allow_corrupt();
+    objects_delete(&fake_oh, old_id);
+    CHECK_EQ(fake_corrupt_count, 1);
+    CHECK_EQ(objects_size_of(&fake_oh, current_id), 16);
+    CHECK_EQ(stats().live_objects, 1);
+    objects_delete(&fake_oh, current_id);
+    CHECK_EQ(heap_in_use(&fake_oh), 0);
+    CHECK(heap_verify(&fake_oh));
+#else
+    harness_skip("stale ids after reuse require debug generations");
+#endif
+}
+
 TEST_CASE(create_makes_a_plain_object)
 {
     object_id_t a;
@@ -670,6 +860,13 @@ static const harness_case_t cases[] = {
     HARNESS_CASE(freed_handles_are_reused_last),
     HARNESS_CASE(release_misuse_is_corrupt),
     HARNESS_CASE(alloc_misuse_is_corrupt),
+    HARNESS_CASE(delete_reclaims_payload_and_handles),
+    HARNESS_CASE(delete_allows_repeated_standalone_allocations),
+    HARNESS_CASE(delete_does_not_release_referenced_objects),
+    HARNESS_CASE(delete_rejects_invalid_and_already_freed_ids),
+    HARNESS_CASE(typed_delete_rejects_wrong_kinds),
+    HARNESS_CASE(delete_rejects_pinned_allocations),
+    HARNESS_CASE(delete_rejects_stale_ids_in_debug),
     HARNESS_CASE(create_makes_a_plain_object),
     HARNESS_CASE(clone_copies_the_payload),
     HARNESS_CASE(pins_nest_up_to_seven),

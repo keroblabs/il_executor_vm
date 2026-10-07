@@ -53,6 +53,19 @@ object_id_t array_create(obj_handler_t * oh, uint16_t type, uint16_t elem_size, 
     return id;
 }
 
+void array_delete(obj_handler_t * oh, object_id_t id)
+{
+    object_info_t info;
+
+    if (!objects_info(oh, id, &info, "array_delete: not a live array"))
+        return;
+    if (info.kind != OBJECT_K_ARRAY) {
+        objects_corrupt(oh, "array_delete: not an array", id);
+        return;
+    }
+    objects_delete(oh, id);
+}
+
 uint32_t array_length(obj_handler_t * oh, object_id_t id)
 {
     object_info_t info;

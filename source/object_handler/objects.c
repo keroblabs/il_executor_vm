@@ -168,6 +168,11 @@ object_id_t objects_clone(obj_handler_t * oh, object_id_t id)
     return copy;
 }
 
+void objects_delete(obj_handler_t * oh, object_id_t id)
+{
+    heap_release(oh, id);
+}
+
 object_id_t objects_promote(obj_handler_t * oh, object_id_t id)
 {
     /* Nothing lives in OBJECT_SPACE_FRAME until tier 2 (doc 14 section 6.5). */

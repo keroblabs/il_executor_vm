@@ -33,7 +33,7 @@ static int obj_handler_const_ok(obj_handler_t * oh, const obj_handler_config_t *
         return 0;
     p = cfg->const_base + c->offset;
     if (c->kind == OBJECT_K_STRING)
-        return c->size != 0 && p[c->size - 1u] == 0;
+        return obj_string_check_const(oh, p, c->size);
     if (c->kind == OBJECT_K_RAW)
         return 1;
     if (c->kind == OBJECT_K_ARRAY) {

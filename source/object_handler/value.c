@@ -15,6 +15,19 @@ object_id_t value_box(obj_handler_t * oh, uint16_t type, const void * src, uint3
     return id;
 }
 
+void value_delete(obj_handler_t * oh, object_id_t id)
+{
+    object_info_t info;
+
+    if (!objects_info(oh, id, &info, "value_delete: not a live box"))
+        return;
+    if (info.kind != OBJECT_K_BOX) {
+        objects_corrupt(oh, "value_delete: not a box", id);
+        return;
+    }
+    objects_delete(oh, id);
+}
+
 void value_unbox(obj_handler_t * oh, object_id_t id, void * dst, uint32_t bytes)
 {
     object_info_t info;

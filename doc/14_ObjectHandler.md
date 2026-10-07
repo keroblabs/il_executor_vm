@@ -81,8 +81,8 @@ source/object_handler/
 
 The shared header is `objects_types.h`, not `types.h`: the name carries its
 owning module (§1.2), and `source/types.h` already exists one directory up.
-The library's include path contains only this directory, so that collision is
-impossible rather than merely avoided —
+The library's include path contains only its source directory and generated
+configuration directory, so that collision is impossible rather than merely avoided —
 [18_ObjectHandler_Build_Plan.md](18_ObjectHandler_Build_Plan.md) D3.
 
 The string module is `obj_string`, not `strings`, because that collision runs
@@ -104,6 +104,25 @@ Warnings are `-Wall -Wextra -Werror -pedantic -Wshadow -Wstrict-prototypes
 embedder's `LIKELY` — and use `__builtin_expect` on GCC and Clang, a plain
 expression elsewhere. Headers are wrapped in `extern "C"`, and every file has
 LF line endings.
+
+**Build configuration and ABI (2026-10-02).** The library build chooses the
+five debug switches and generates `obj_handler_build_config.h`; every
+translation unit uses that header, including the embedder's. Initial
+defaults follow `CMAKE_BUILD_TYPE`: on except for Release, RelWithDebInfo
+and MinSizeRel, and each switch is configurable with the CMake boolean
+`OBJECT_HANDLER_<switch>`. The choices are frozen for the build tree,
+including every configuration of a multi-config generator. The
+caller's own `NDEBUG` does not select ObjectHandler's id encoding, handle
+layout or inline calls. Conflicting `-D` overrides are rejected at compile
+time. This preserves the existing debug and release layouts (§2.1, §3.2).
+
+The CMake target publishes both the source and generated include paths;
+neither reaches the parser. An installed library ships the generated
+configuration with its public headers and exports
+`object_handler::object_handler` through `object_handlerConfig.cmake`.
+Consumers link that target with `find_package(object_handler CONFIG)`.
+Direct compiler builds must also use the matching generated header, not
+derive a configuration independently from their own optimisation settings.
 
 ### 1.2 Naming
 
@@ -477,6 +496,14 @@ flags, bounds, a string's NUL, an array's header, and that an object, array
 or box constant has a NULL refmap — and returns `OBJ_HANDLER_E_CONST` for the
 first bad one (§9.2).
 
+**Constant-string trust boundary (B10, 2026-10-02).** `cli_pack` guarantees
+valid UTF-8, a correct byte size including the final NUL, and an accurate
+`OBJECT_H_ASCII` flag. Independent embedders obey the same producer contract.
+After checking an entry's bounds, init uses `obj_string_check_const` (§5.6)
+for the minimum representation check; it neither scans UTF-8 nor recomputes
+ASCII. Image integrity and validation of untrusted images belong to the
+loader or tooling, not routine string access.
+
 **Literals are constants, read in place.** `obj_string_intern(i)` returns
 `OBJECT_ID(CONST, i)` once it has checked that entry *i* is a string: no copy
 and no allocation, so `ldstr` can neither run out of memory nor trigger a
@@ -794,6 +821,15 @@ forms, truncated sequences, surrogates and code points above U+10FFFF return
 `OBJECT_NULL`, and the caller throws or substitutes U+FFFD first. The type id
 of every string is `obj_handler_config_t.string_type` (§9). A literal is a
 constant, and `obj_string_intern` returns its id (§3.5).
+
+**Minimum constant-string check (C8).** `obj_string_check_const(oh, payload,
+size)` returns 1 exactly when `payload` is non-NULL, `size` is at least one,
+and `payload[size - 1]` is NUL. The caller must establish that the whole
+payload range is readable before calling it. It allocates nothing, reports
+no callback, and is safe before init; it does not validate UTF-8 or the ASCII
+flag (§3.5). Embedded NULs are valid content, so the explicit byte size,
+including the final terminator, is used rather than `strlen`.
+`obj_string_create` still validates runtime UTF-8 strictly.
 
 ### 5.7 Array payloads — one-dimensional, inline elements
 
@@ -1432,6 +1468,25 @@ elements ([11 §9](11_Memory_Model.md)).
 One header per module; `obj_handler.h` includes them all, exactly as Ruffus's
 `obj_handler.h` does.
 
+**Explicit deletion (2026-10-02).** Embedders may manage heap lifetimes
+without a collector: `objects_delete` releases any live heap allocation;
+`obj_string_delete`, `array_delete` and `value_delete` require a string,
+array or box respectively. All return `void` and reuse `heap_release`, so
+payload space and the handle are returned immediately, with coalescing,
+quarantine and the debug generation change preserved. Neither deletion nor
+numeric comparison/conversion allocates or runs a collection; only boxed
+values need `value_delete`, not primitive stack slots.
+
+Deletion is non-recursive: referenced objects and array elements retain
+their own lifetimes. The embedder must remove stored aliases and must not
+use the deleted id, interior byrefs or raw pointers afterwards; deletion
+does not discover or clear those references. Constants, flat spaces, pinned
+objects, null/invalid/already-freed ids and a wrong kind for a typed delete
+go to `on_corrupt` and are not released. Debug generations detect stale ids
+after handle reuse; release builds cannot distinguish a stale id from a
+new allocation reusing that handle. `heap_release` remains the shared
+low-level operation for public deletion, the future sweep and tests.
+
 ```c
 /* ---- obj_handler.h : library lifecycle ------------------------------ */
 obj_handler_status_t obj_handler_init(obj_handler_t * oh,
@@ -1448,6 +1503,7 @@ uint8_t     objects_kind_of(obj_handler_t * oh, object_id_t id);
 
 object_id_t objects_create(obj_handler_t * oh, uint16_t type, uint32_t bytes); /* newobj */
 object_id_t objects_clone(obj_handler_t * oh, object_id_t id);
+void        objects_delete(obj_handler_t * oh, object_id_t id);
 object_id_t objects_promote(obj_handler_t * oh, object_id_t id);       /* scratch->heap */
 static inline object_id_t objects_escape(obj_handler_t * oh, object_id_t id);
 static inline void objects_write_ref(obj_handler_t * oh, object_id_t * slot,
@@ -1484,6 +1540,7 @@ int              stack_verify(obj_handler_t * oh);
 /* ---- array.h / obj_string.h / value.h : typed constructors ----------- */
 object_id_t array_create(obj_handler_t * oh, uint16_t type, uint16_t elem_size,
                          uint32_t count);                                     /* §5.7 */
+void        array_delete(obj_handler_t * oh, object_id_t id);
 uint32_t    array_length(obj_handler_t * oh, object_id_t id);
 void *      array_range_ptr(obj_handler_t * oh, object_id_t id, uint32_t index,
                             uint32_t count);                     /* NULL: out of range */
@@ -1495,7 +1552,10 @@ void        array_copy(obj_handler_t * oh, object_id_t dst, uint32_t dst_index,
                        object_id_t src, uint32_t src_index, uint32_t count);
 void        array_clear(obj_handler_t * oh, object_id_t id, uint32_t index, uint32_t count);
 
+int         obj_string_check_const(obj_handler_t * oh, const uint8_t * payload,
+                                   uint32_t size);                            /* §5.6 */
 object_id_t obj_string_create(obj_handler_t * oh, const char * utf8, uint32_t len); /* §5.6 */
+void        obj_string_delete(obj_handler_t * oh, object_id_t id);
 object_id_t obj_string_intern(obj_handler_t * oh, uint16_t literal_index);
 object_id_t obj_string_concat(obj_handler_t * oh, object_id_t a, object_id_t b);
 uint32_t    obj_string_length(obj_handler_t * oh, object_id_t id);
@@ -1503,6 +1563,7 @@ int32_t     obj_string_char_at(obj_handler_t * oh, object_id_t id,
                                uint32_t index);                  /* -1: out of range */
 
 object_id_t value_box(obj_handler_t * oh, uint16_t type, const void * src, uint32_t bytes);
+void        value_delete(obj_handler_t * oh, object_id_t id);
 void        value_unbox(obj_handler_t * oh, object_id_t id, void * dst, uint32_t bytes);
 int32_t     value_compare(obj_handler_t * oh, const stack_slot_t * a,
                           const stack_slot_t * b, uint32_t flags);        /* §6.7 */
@@ -1711,6 +1772,7 @@ The limits behind the codes:
 | Collection trigger | **Both**, and configurable: 75 % occupancy requested as a flag, *plus* an immediate forced collect-and-retry on allocation failure — §7.3 |
 | Debug object identity | **A generation counter in the id, debug builds only**: 8-bit space / 8-bit generation / 16-bit index, same 32-bit width, so a stale id is rejected at its first use instead of aliasing a recycled handle — §2.1, §3.2, §3.4 |
 | String representation | **UTF-8**, identical on MCU and host. `cli_pack` converts ASCII literals and **errors** on any code point ≥ U+0080 or any unpaired surrogate, unless `--allow-non-ascii` is given — §5.6 |
+| Constant-string validation (B10/C8, 2026-10-02) | Trust the producer for UTF-8, byte size and `OBJECT_H_ASCII`. After entry bounds are checked, init reuses `obj_string_check_const`: non-NULL payload, size at least one, final NUL; no allocation, callbacks or UTF-8 scan, usable before init. Embedded NULs are valid content. Runtime creation remains strict — §3.5, §5.6 |
 | Init failure reporting | **`obj_handler_status_t`**, returned by `obj_handler_init` only — one code per thing the embedder has to fix, appended per slice. Before init errors are returned; after it, embedder bugs go to `on_corrupt` — §9.2 |
 | Array model | **One-dimensional arrays of inline elements** — primitives, ids or structs — with a fixed length. The type's refmap describes one element; `array_range_ptr` is the only range check — §5.7 |
 | Pre-OH-1 review (2026-09-28) | [19](19_Session_Checklist.md) A2–A13, accepted as recommended: one calling thread (§1); C99 baseline (§1.1); a pin count (§3.2); `heap_release` bumps the generation (§3.4); `OBJECT_NULL` only for a request that can never fit (§5.2); stack roots through a registered scanner, no `[ThreadStatic]` (§7.4); scan rule per kind, 4-aligned ids (§7.5); the intern table in the config (§9); `on_corrupt` always returns (§9.2) |
@@ -1720,6 +1782,8 @@ The limits behind the codes:
 | Coding D7 (2026-09-28) | Every reader goes through one library-internal view, `objects_info`, which answers from a heap handle or a constant entry alike. A constant id with a non-zero generation is refused in debug. Init checks the statics before the constants, in enum order: the slab 8-aligned, 16 to 65536 bytes, a multiple of 8, words 0 and 1 unmarked; the table 8-aligned, at most 65536 entries, `const_size` covering the entries. `objects_space_register` now accepts only `OBJECT_SPACE_NATIVE` |
 | Coding OH-5 (2026-09-28) | `array_create` rejects `count` above 65535, and a `count × elem_size` that cannot fit, before multiplying. `array_copy` sends each id of a reference array through `objects_write_ref`, in overlap-safe order; other elements move by `memmove`, struct ids included (item 3 below). An out-of-range `array_element_byref` has `id` `OBJECT_NULL`. `value_unbox` requires a live box of exactly the size asked. `objects_clone` keeps `OBJECT_H_ASCII` |
 | Application and instance (A14, 2026-09-28) | The owner's model: an application is one CLI binary, packed into one image and run on one OS thread; its managed threads are green threads the VM schedules; running several applications at once is not a use case. **All library state is in `obj_handler_t`**, which every call takes first and every host callback receives, so the library keeps no hidden globals (§8). Built before OH-3 and OH-4 — §1, §7.5, §8, §9 |
+| Public build configuration (C9, 2026-10-02) | The generated `obj_handler_build_config.h` freezes all five switches for the library and callers. Caller `NDEBUG` is independent; conflicting switch overrides are compile errors. The existing debug/release id and handle layouts stay unchanged. CMake publishes and installs the matching headers and exports `object_handler::object_handler`; direct compiler builds use the same generated header — §1.1 |
+| Explicit embedder deletion (C10, 2026-10-02) | Embedders may release individual heap allocations while GC remains deferred. `objects_delete` accepts any heap kind; string, array and value deletion require their own kinds, with `value_delete` freeing boxes only. Deletion is non-recursive and uses `heap_release`; constants, flat spaces, pins and invalid ids are refused through `on_corrupt`. Callers manage aliases and referent lifetimes — §8 |
 | Value normalisation (B6, 2026-09-29) | **The library normalises; the interpreter chooses.** `value_compare` orders any two slots and `value_convert` converts any number to any primitive type; which one an opcode needs, and whether its operands are valid under §III.1.5, is the interpreter's. Integers compare in 64 bits, signed or unsigned; an integer meets a double through the conversion; references compare by id, byrefs by address, any other mix is `VALUE_UNORDERED`. Conversions follow Table III.8, and a float out of range saturates, NaN to 0. `stack_slot_t` is declared in `objects_types.h` — §1, §6.1, §6.7 |
 | Coding value normalisation (2026-09-29) | `VALUE_T_*` start at 1, so a zeroed target is refused: 0, `VALUE_T_COUNT` and above go to `on_corrupt`. `value_convert` builds its result in a zeroed slot — `flags` and `aux` 0 — and writes `dst` only when it returns 1. Integers are read and narrowed as 64-bit patterns, with no implementation-defined conversion. The sanitized debug build adds `float-cast-overflow`, which GCC's `undefined` group leaves out, so a double cast out of range cannot pass unnoticed — §6.7 |
 | Stack (OH-4, 2026-09-29) | [19](19_Session_Checklist.md) OH-4, accepted as recommended, built before OH-3. The record is `stack_thread_t`, passed to every per-thread call: no current-thread pointer anywhere. The VM supplies each thread's slot and frame arrays and ends a thread with `stack_thread_end`, so `stack_mem` leaves the config. Overflow is checked once per call in every build, per push and pop in debug; `stack_room` serves frameless use. From Ruffus's API come push, pop and peek per slot kind, `dup`, `drop` and `depth` — not `stack_scanf`, `stack_push_string` or `stack_dump`. The tier-2 hooks leave the API, the frame counts are 16-bit, and `stack_frame_pop` takes `ret_slots`. A registered scanner reaches the stacks (A7) — §6.2, §7.4, §8, §9 |

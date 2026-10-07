@@ -94,6 +94,62 @@ TEST_CASE(init_rejects_malformed_statics)
 
 /* ---- the constant table (doc 14 section 3.5) ------------------------- */
 
+TEST_CASE(constant_string_check_accepts_only_terminated_payloads)
+{
+    static const uint8_t empty[] = { 0 };
+    static const uint8_t text[] = { 'o', 'k', 0 };
+    static const uint8_t embedded[] = { 'a', 0, 'b', 0 };
+    static const uint8_t unterminated[] = { 'o', 'k' };
+    static const uint8_t trusted[] = { 0xF0, 0 };
+
+    CHECK(!obj_handler_is_ready(&fake_oh));
+    CHECK(obj_string_check_const(&fake_oh, empty, sizeof empty));
+    CHECK(obj_string_check_const(&fake_oh, text, sizeof text));
+    CHECK(obj_string_check_const(&fake_oh, embedded, sizeof embedded));
+    CHECK(obj_string_check_const(&fake_oh, trusted, sizeof trusted));
+    CHECK(!obj_string_check_const(&fake_oh, NULL, 0));
+    CHECK(!obj_string_check_const(&fake_oh, NULL, 1));
+    CHECK(!obj_string_check_const(&fake_oh, NULL, UINT32_MAX));
+    CHECK(!obj_string_check_const(&fake_oh, text, 0));
+    CHECK(!obj_string_check_const(&fake_oh, text, sizeof text - 1u));
+    CHECK(!obj_string_check_const(&fake_oh, unterminated, sizeof unterminated));
+    CHECK(!obj_handler_is_ready(&fake_oh));
+    CHECK_EQ(fake_corrupt_count, 0);
+}
+
+TEST_CASE(constant_string_init_preserves_trusted_content)
+{
+    static const uint8_t trusted[] = { 0xF0, 0 };
+    object_id_t empty;
+    object_id_t embedded;
+    object_id_t opaque;
+    object_info_t info;
+
+    fake_config(PAYLOAD, HANDLES);
+    fake_consts_begin();
+    empty = OBJECT_ID(OBJECT_SPACE_CONST, fake_const_string("", 0));
+    embedded = OBJECT_ID(OBJECT_SPACE_CONST, fake_const_string("a\0b", 3));
+    opaque = OBJECT_ID(OBJECT_SPACE_CONST,
+                      fake_const_add(FAKE_T_STRING, OBJECT_K_STRING, OBJECT_H_ASCII,
+                                     trusted, sizeof trusted));
+    fake_consts_install();
+    fake_start();
+
+    CHECK_EQ(objects_size_of(&fake_oh, empty), 1);
+    CHECK_EQ(obj_string_length(&fake_oh, empty), 0);
+    CHECK_EQ(obj_string_char_at(&fake_oh, empty, 0), -1);
+    CHECK_EQ(obj_string_length(&fake_oh, embedded), 3);
+    CHECK_EQ(obj_string_char_at(&fake_oh, embedded, 0), 'a');
+    CHECK_EQ(obj_string_char_at(&fake_oh, embedded, 1), 0);
+    CHECK_EQ(obj_string_char_at(&fake_oh, embedded, 2), 'b');
+    CHECK_EQ(obj_string_char_at(&fake_oh, embedded, 3), -1);
+    CHECK(objects_info(&fake_oh, opaque, &info, "constant_string_init"));
+    CHECK_EQ(info.flags, OBJECT_H_ASCII);
+    CHECK(memcmp(objects_ptr(&fake_oh, opaque), trusted, sizeof trusted) == 0);
+    CHECK_EQ(heap_in_use(&fake_oh), 0);
+    CHECK_EQ(fake_corrupt_count, 0);
+}
+
 TEST_CASE(literal_is_read_in_place)
 {
     object_id_t id;
@@ -216,6 +272,41 @@ TEST_CASE(writing_into_a_constant_is_corrupt)
     heap_release(&fake_oh, s);
     CHECK_EQ(fake_corrupt_count, 4);
     CHECK_EQ(*(const int32_t *)array_element_ptr(&fake_oh, c, 0), 7);  /* untouched */
+}
+
+TEST_CASE(delete_rejects_constants_and_flat_spaces)
+{
+    void (*const delete_functions[])(obj_handler_t *, object_id_t) = {
+        objects_delete, obj_string_delete, array_delete, value_delete
+    };
+    const int32_t number = 42;
+    object_id_t ids[4];
+    size_t operation;
+
+    fake_config(PAYLOAD, HANDLES);
+    fake_consts_begin();
+    ids[0] = OBJECT_ID(OBJECT_SPACE_CONST,
+                       fake_const_add(FAKE_T_DATA, OBJECT_K_OBJECT, 0,
+                                      &number, sizeof number));
+    ids[1] = OBJECT_ID(OBJECT_SPACE_CONST, fake_const_string("text", 4));
+    ids[2] = OBJECT_ID(OBJECT_SPACE_CONST, fake_const_array(FAKE_T_DATA, 4, 1, &number));
+    ids[3] = OBJECT_ID(OBJECT_SPACE_CONST,
+                       fake_const_add(FAKE_T_DATA, OBJECT_K_BOX, 0,
+                                      &number, sizeof number));
+    fake_consts_install();
+    fake_start();
+    fake_allow_corrupt();
+    for (operation = 0; operation < 4; operation++) {
+        delete_functions[operation](&fake_oh, ids[operation]);
+        delete_functions[operation](&fake_oh, OBJECT_ID(OBJECT_SPACE_STATIC, 8));
+    }
+    CHECK_EQ(fake_corrupt_count, 8);
+    CHECK_EQ(obj_string_length(&fake_oh, ids[1]), 4);
+    CHECK_EQ(array_length(&fake_oh, ids[2]), 1);
+    CHECK_EQ(objects_size_of(&fake_oh, ids[0]), sizeof number);
+    CHECK_EQ(objects_size_of(&fake_oh, ids[3]), sizeof number);
+    CHECK_EQ(stats().live_objects, 0);
+    CHECK(heap_verify(&fake_oh));
 }
 
 TEST_CASE(pinning_a_constant_does_nothing)
@@ -397,12 +488,15 @@ static const harness_case_t cases[] = {
     HARNESS_CASE(statics_reserved_bytes_and_bounds_in_debug),
     HARNESS_CASE(statics_are_optional),
     HARNESS_CASE(init_rejects_malformed_statics),
+    HARNESS_CASE(constant_string_check_accepts_only_terminated_payloads),
+    HARNESS_CASE(constant_string_init_preserves_trusted_content),
     HARNESS_CASE(literal_is_read_in_place),
     HARNESS_CASE(non_ascii_literal_decodes),
     HARNESS_CASE(intern_misuse_is_corrupt),
     HARNESS_CASE(constants_are_optional),
     HARNESS_CASE(constant_array_reads_like_a_heap_array),
     HARNESS_CASE(writing_into_a_constant_is_corrupt),
+    HARNESS_CASE(delete_rejects_constants_and_flat_spaces),
     HARNESS_CASE(pinning_a_constant_does_nothing),
     HARNESS_CASE(concat_and_clone_copy_constants_into_the_heap),
     HARNESS_CASE(constant_box_unboxes),

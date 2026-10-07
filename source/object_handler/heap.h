@@ -34,7 +34,7 @@ uint32_t    heap_largest_free(obj_handler_t * oh);
 /* 1: consistent; 0: the first fault went to on_corrupt. */
 int         heap_verify(obj_handler_t * oh);
 
-/* Called by the sweep and by tests; an embedder never frees (doc 18 section 4). */
+/* Shared by public deletion, the sweep and tests (doc 18 section 4). */
 void        heap_release(obj_handler_t * oh, object_id_t id);
 
 /* Library-internal: called by obj_handler_init and obj_handler_shutdown. */

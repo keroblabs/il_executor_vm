@@ -1,3 +1,11 @@
+#ifdef OBJECT_HANDLER_TEST_OPPOSITE_NDEBUG
+#ifdef NDEBUG
+#undef NDEBUG
+#else
+#define NDEBUG 1
+#endif
+#endif
+
 #include <string.h>
 #include "harness.h"
 #include "fake_embedder.h"
@@ -19,6 +27,37 @@ static void expect_valid_init(void)
 }
 
 /* ---- ids ------------------------------------------------------------- */
+
+TEST_CASE(consumer_configuration_matches_library)
+{
+    stack_thread_t thread = {0};
+    stack_slot_t slots[2];
+    object_id_t id;
+
+    fake_init(PAYLOAD, HANDLES);
+    id = objects_create(&fake_oh, FAKE_T_DATA, 16);
+    CHECK(id != OBJECT_NULL);
+    CHECK_EQ(OBJECT_SPACE(id), OBJECT_SPACE_HEAP);
+    CHECK_EQ(fake_handles()[OBJECT_INDEX(id)].size, 16);
+    CHECK(objects_ptr(&fake_oh, id) == fake_payload() + fake_handles()[OBJECT_INDEX(id)].offset);
+    CHECK(stack_thread_init(&fake_oh, &thread, slots, 2, NULL, 0));
+    stack_push_ref(&thread, id);
+    CHECK_EQ(stack_pop_ref(&thread), id);
+    stack_thread_end(&thread);
+    objects_delete(&fake_oh, id);
+    id = obj_string_create(&fake_oh, "text", 4);
+    CHECK(id != OBJECT_NULL);
+    obj_string_delete(&fake_oh, id);
+    id = array_create(&fake_oh, FAKE_T_DATA, 4, 1);
+    CHECK(id != OBJECT_NULL);
+    array_delete(&fake_oh, id);
+    id = value_box(&fake_oh, FAKE_T_DATA, &slots[0].u.id, sizeof slots[0].u.id);
+    CHECK(id != OBJECT_NULL);
+    value_delete(&fake_oh, id);
+    CHECK_EQ(heap_in_use(&fake_oh), 0);
+    CHECK(heap_verify(&fake_oh));
+    CHECK_EQ(fake_corrupt_count, 0);
+}
 
 TEST_CASE(id_round_trip_every_space)
 {
@@ -399,6 +438,7 @@ TEST_CASE(write_ref_and_escape_are_identity)
 }
 
 static const harness_case_t cases[] = {
+    HARNESS_CASE(consumer_configuration_matches_library),
     HARNESS_CASE(id_round_trip_every_space),
     HARNESS_CASE(id_generation_split),
     HARNESS_CASE(init_ok),

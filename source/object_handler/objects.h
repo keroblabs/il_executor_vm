@@ -12,7 +12,7 @@ void *      objects_resolve_indirect(obj_handler_t * oh, object_id_t id);
 void *      objects_ptr_checked(obj_handler_t * oh, object_id_t id);
 #endif
 
-/* Valid until the next safepoint (doc 14 section 2.1.1). */
+/* Valid until deletion or the next safepoint (doc 14 sections 2.1.1 and 8). */
 static inline void * objects_ptr(obj_handler_t * oh, object_id_t id)
 {
 #if OBJECT_DEBUG_REFS
@@ -42,6 +42,7 @@ uint8_t     objects_kind_of(obj_handler_t * oh, object_id_t id);
 /* May collect: every live id must be reachable from a root first (doc 14 section 7.3). */
 object_id_t objects_create(obj_handler_t * oh, uint16_t type, uint32_t bytes);
 object_id_t objects_clone(obj_handler_t * oh, object_id_t id);
+void        objects_delete(obj_handler_t * oh, object_id_t id);
 object_id_t objects_promote(obj_handler_t * oh, object_id_t id);
 
 /* Identity in v1; tier 2 turns this pair into the escape barrier (doc 14 section 6.0). */

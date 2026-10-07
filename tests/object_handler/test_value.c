@@ -24,6 +24,8 @@ static void round_trip(const void * value, uint32_t bytes)
     value_unbox(&fake_oh, box, out, bytes);
     CHECK(memcmp(out, value, bytes) == 0);
     CHECK_EQ(out[bytes], 0xEE);                 /* nothing past the value is written */
+    value_delete(&fake_oh, box);
+    CHECK_EQ(heap_in_use(&fake_oh), 0);
 }
 
 TEST_CASE(box_round_trips_every_primitive)
@@ -90,6 +92,9 @@ TEST_CASE(box_of_an_empty_struct)
     CHECK(box != OBJECT_NULL);
     CHECK_EQ(objects_size_of(&fake_oh, box), 0);
     value_unbox(&fake_oh, box, NULL, 0);
+    value_delete(&fake_oh, box);
+    CHECK_EQ(heap_in_use(&fake_oh), 0);
+    CHECK(!(handle_of(box)->flags & OBJECT_H_INUSE));
     CHECK_EQ(fake_corrupt_count, 0);
 }
 

@@ -11,7 +11,8 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-09-29**, at commit `2663ca2`.
+State recorded here: **2026-10-02**, based on commit `4e0bc66`, with C8-C10
+implemented but not yet committed.
 
 ---
 
@@ -84,6 +85,7 @@ Decided. Changing one means changing the contract first.
 | Collector | tricolour mark-sweep, precise, non-moving in v1; a 75 % threshold sets a flag, and a failed allocation collects at once | 14 §7 |
 | Init failures | `obj_handler_status_t`, from `obj_handler_init` only; after init, embedder bugs go to `on_corrupt`, which always returns | 14 §9.2 |
 | Allocation failure | `OBJECT_NULL` only for a request that can never fit; otherwise collect, retry once, `on_no_memory` | 14 §5.2 |
+| Explicit deletion | caller-owned, non-recursive heap deletion; typed deletes check kind; aliases must not be used afterwards; GC remains deferred | 14 §8, C10 |
 | Pins | a count, 0–7, in the handle's flags | 14 §3.2 |
 | Compiler baseline | C99, also built as C11; `-Wall -Wextra -Werror -pedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes` | 14 §1.1 |
 
@@ -137,7 +139,9 @@ Decided. Changing one means changing the contract first.
    and standalone — the library configured on its own, which proves it
    reaches nothing in `source/`. Every case runs in its own process; a case
    that means something in one build only exits 77 and is reported as
-   skipped. Baseline: 135 cases pass, with zero warnings.
+  skipped. Baseline: 147 cases pass or explicitly skip in each build,
+  including C8-C10 and the opposite-`NDEBUG` consumer. C9's build-matrix case
+  also verifies installed consumers and conflicting overrides (§4 C9).
 2. **Every library file on its own, through the ARM compiler** and host gcc,
    C99 and C11, debug and release switches. Baseline: zero diagnostics.
 3. **A behaviour change is proved by a case** that fails before the change
@@ -203,32 +207,39 @@ The commands are in §5.3.
 
 | File | Holds | Slice |
 |---|---|---|
-| `obj_handler_config.h` | the one configuration: space count, segments, `HEAP_MAX_PAYLOAD`, string encoding; the five debug switches, on unless `NDEBUG` | OH-1, OH-4 |
+| `obj_handler_config.h` | the one configuration: space count, segments, `HEAP_MAX_PAYLOAD`, string encoding; five switches from the generated build configuration, with conflicting overrides rejected | OH-1, OH-4, C9 |
+| `obj_handler_build_config.h.in` | template for the generated header shared by library and consumer; the build chooses each switch, independently of caller `NDEBUG` | C9 |
 | `objects_types.h` | `object_id_t` and its macros in both splits; spaces, among them the thread-relative `STACK`, `object_handle_t`, flags with the pin count, kinds, byref, `array_header_t`, the stack slot `stack_slot_t` and its `STACK_K_*` kinds, the constant entry `object_const_t`; the collector's visitor and scan types; the instance `obj_handler_t`, with the host callbacks, heap segments, thread ring and registered scan it holds; `OBJECT_LIKELY`; layout asserts | OH-1, D7, I1, B6, OH-4, B8 |
-| `objects.c/.h` | the space table, `objects_ptr` (checked in debug) and the constant resolver, `objects_info`, registration of `NATIVE`, accessors, `objects_create`/`clone`/`promote`/`pin`/`unpin`, the identity barrier | OH-1, OH-2, D7 |
+| `objects.c/.h` | the space table, `objects_ptr` (checked in debug) and the constant resolver, `objects_info`, registration of `NATIVE`, accessors, `objects_create`/`clone`/`delete`/`promote`/`pin`/`unpin`, the identity barrier | OH-1, OH-2, D7, C10 |
 | `obj_handler.c/.h` | the umbrella: status codes, the config struct, `obj_handler_init` on the caller's instance with its ten checks, `obj_handler_shutdown`, which zeroes it | OH-1, D7, I1 |
 | `heap.c/.h` | first fit with coalescing, bump top, handle free list with quarantine, generations, guard headers and poisoning in debug, `heap_verify`, `heap_stats` | OH-2 |
 | `gc.c/.h` | stub: `gc_request` and `gc_collect` do nothing until OH-3; `gc_register_root_scan` keeps the stack's scanner (A7) | OH-2, OH-4 |
 | `stack.c/.h` | `stack_thread_t` and `stack_frame_t`; `stack_thread_init` on the VM's record and arrays, `stack_thread_end`; inline push, pop and peek per slot kind and whole slot, `dup`, `drop`, `depth`, `room`, checked under `STACK_DEBUG`; `stack_frame_push`/`pop` with overlapped arguments, typed locals and one overflow check per call; `stack_slot_byref` and `stack_byref_ptr`; `stack_scan_roots`; `stack_verify` | OH-4, B8 |
-| `array.c/.h` | `array_create`, length, the one range check, element pointer and byref, overlap-safe copy through the barrier, clear | OH-5 |
-| `obj_string.c/.h` | strict UTF-8 validation, create, concat, `Length` and `char_at` in UTF-16 units, `OBJECT_H_ASCII`; `obj_string_intern` returns a constant's id | OH-5, D7 |
-| `value.c/.h` | `value_box`, `value_unbox`; `value_compare` over every pair of slot kinds, stack byrefs by slot, and `value_convert` to twelve primitive types, checked or not (14 §6.7) | OH-5, B6, B8 |
-| `CMakeLists.txt` | target `object_handler`; configured on its own, it is the standalone build and adds the tests | OH-1 |
+| `array.c/.h` | `array_create`/`delete`, length, the one range check, element pointer and byref, overlap-safe copy through the barrier, clear | OH-5, C10 |
+| `obj_string.c/.h` | minimum constant-string representation check, strict runtime UTF-8 validation, create/delete, concat, `Length` and `char_at` in UTF-16 units, `OBJECT_H_ASCII`; `obj_string_intern` returns a constant's id | OH-5, D7, C8, C10 |
+| `value.c/.h` | `value_box`, `value_unbox`, `value_delete` for boxes; `value_compare` over every pair of slot kinds, stack byrefs by slot, and `value_convert` to twelve primitive types, checked or not (14 §6.7) | OH-5, B6, B8, C10 |
+| `CMakeLists.txt` | target `object_handler`; shared generated configuration, build/install include paths, install/export package; configured on its own, it adds the standalone tests | OH-1, C9 |
 
 `tests/object_handler/`: `harness.c/.h` (L1), `fake_embedder.c/.h` (L2),
-`test_objects.c` (25 cases), `test_heap.c` (29, among them two seeded 64 KB
+`test_objects.c` (26 cases), `test_heap.c` (36, among them two seeded 64 KB
 tortures and deliberate-damage cases that `heap_verify` must catch),
 `test_array_string.c` (21, among them a 22-row UTF-8 table),
 `test_value.c` (17, among them the kind-pair matrix and a 108-row conversion
-table), `test_spaces.c` (16: statics, constants, and one
-case per malformed slab or table entry), `test_instances.c` (5: two
+table), `test_spaces.c` (19: statics, constants, one case per malformed slab
+or table entry, the minimum string check and the trusted-content boundary),
+`test_instances.c` (5: two
 instances side by side, among them a seeded interleaving in which one runs
 out of memory beside the other) and `test_stack.c` (22: frames, recursion to
 both limits, a look-alike `int32` the scanner must skip, two threads
 switched by passing the record, `out` arguments written into the caller's
-locals, and damage `stack_verify` must catch).
+locals, and damage `stack_verify` must catch). The same object test source
+also builds `test_consumer_config`, with its own `NDEBUG` flipped; one case
+proves ids, handle indexing and stack inlines match the library. The
+`test_build_config.cmake` case builds three variants and tests installed
+consumers plus compile-time configuration conflicts; child builds disable
+that case to avoid recursion.
 
-Release build for Cortex-M4 at `-Os`: 9,978 bytes of `.text` and no `.data`
+Last measured release build for Cortex-M4 at `-Os`, before C8: 9,978 bytes of `.text` and no `.data`
 or `.bss`; one instance is 468 bytes, and the embedder allocates it, as the
 VM does each thread's 40-byte record and its arrays.
 `value.c` calls libgcc's soft-float helpers, which the interpreter needs for
@@ -394,6 +405,28 @@ These either land in the first commit's headers or block OH-1.
   `ldloc`, `stloc`, `ldarg` and `starg` — or a per-method type table the
   interpreter reads — and a `call` that narrows `float32` arguments. Doc 15
   has no such transform yet.
+- [x] **B10 - Constant-string trust boundary.** *Decided 2026-10-02:*
+  trust `cli_pack` to emit valid UTF-8, the correct byte size including the
+  final NUL, and an accurate `OBJECT_H_ASCII` flag for constants in `.vxb`.
+  Independent embedders must satisfy the same producer contract. Routine
+  loading and string access do not re-scan trusted constants for UTF-8 or
+  recompute ASCII. Keep structural checks, including entry bounds and the
+  minimum string representation check in C8. `obj_string_create` continues
+  to validate runtime input strictly. Image integrity and validation of
+  untrusted images are separate loader or tooling concerns. This checkbox
+  records the decision, not implementation of C8 (14 sections 3.5 and 5.6).
+- [x] **B11 - Constant-array size is a producer contract.** *Decided
+  2026-10-02:* under the trusted `.vxb` contract, `cli_pack` must reject a
+  constant array whose complete payload, including its 8-byte header,
+  exceeds 65536 bytes. Exactly 65536 bytes is allowed; every valid element
+  byte offset then fits the 16-bit `object_byref_t.offset` (at most 65535).
+  Independent embedders must satisfy the same precondition. No additional
+  release-time validation or byref guard is required in ObjectHandler for
+  trusted constants; existing structural checks remain. An optional debug
+  check would diagnose a producer/embedder bug, not a normal runtime
+  failure. This records the decision, not implemented packer enforcement:
+  the emitter is not built yet. Follow-up in E; the image and library
+  contracts must state the bound (14 sections 3.5, 4 and 5.7).
 
 ### C. Build and code chores
 
@@ -423,6 +456,50 @@ These either land in the first commit's headers or block OH-1.
 - [x] **C7 — Test harnesses.** The heap and array harnesses of 2026-09-25
   lived only in `/tmp`; OH-T recreates them in `tests/object_handler/`.
   *Done* for the heap (`1fe5476`); the array cases come with OH-5.
+- [x] **C8 - Minimum constant-string check.** *Built 2026-10-02:*
+  `obj_string_check_const(oh, payload, size)` in `obj_string.c/.h` returns
+  1 for a non-NULL payload, byte size at least one, and a final NUL at
+  `size - 1`; otherwise 0. Usable before init, with no callback, allocation
+  or UTF-8 scan. `obj_handler.c` reuses it after checking entry bounds.
+  B10 is explicit in 14 sections 3.5, 5.6, 8 and 11. Two new cases cover
+  empty and nonempty strings, NULL payload, zero size, a missing final NUL,
+  embedded NULs, and the absence of UTF-8 scanning or ASCII recomputation.
+  The four focused cases pass; all 137 case reports pass in the active Debug
+  build (sanitizers off), though the full-run wrapper returns `-1`, as it
+  did before C8. All 144 per-file host/ARM C99/C11 debug/release compile
+  checks pass. The separate sanitized, release and standalone test builds
+  were not rerun in the C8 step; they subsequently pass with C9.
+- [x] **C9 - Explicit public build configuration.** *Built 2026-10-02:*
+  CMake generates `obj_handler_build_config.h`, and both library and
+  consumer use those five switch values rather than independently deriving
+  them from `NDEBUG`. Conflicting overrides are compile errors; matching
+  ones are accepted. The existing id and handle layouts are unchanged.
+  The target publishes the generated include path and installs matching
+  headers with an exported `object_handler::object_handler` package.
+  Four focused cases pass. The matrix runs all 139 cases in sanitized
+  Debug, C11 release and standalone builds, then checks installed consumers
+  built with opposite `NDEBUG`, and matching/conflicting overrides of every
+  switch. All 288 host/ARM C99/C11 isolation checks pass across both generated
+  ABIs and both caller modes. All 140 active-build case reports pass; the
+  full-run VS Code wrapper still returns `-1`, as before C9, while the
+  focused matrix run returns success. Normative contract: 14 sections 1.1 and 11;
+  build plan: 18 section 0.2. Changes are uncommitted.
+- [x] **C10 - Explicit embedder deallocation.** *Built 2026-10-02:*
+  `objects_delete` releases any heap allocation; `obj_string_delete`,
+  `array_delete` and `value_delete` check string, array and box kinds.
+  All reuse `heap_release`: immediate payload/handle reclamation, coalescing,
+  quarantine and debug generation advancement. Deletion is non-recursive;
+  referenced objects retain their own lifetimes, and callers remove stored
+  aliases and stop using deleted ids, byrefs and raw pointers. Constants,
+  flat spaces, pins, invalid/already-freed ids and wrong typed kinds go to
+  `on_corrupt`. Primitive slots and compare/convert never allocate and need
+  no deletion. Twelve focused cases pass, including 1000 cycles of all four
+  APIs on a 128-byte heap with three usable handles. The sanitized, C11
+  release and standalone matrix passes all 147 cases or expected skips,
+  including installed consumers calling every delete API; all 288 host/ARM
+  C99/C11 isolation checks pass. GC remains deferred, but standalone
+  embedders can now reclaim memory explicitly. Contract: 14 sections 8 and
+  11; build plan: 18 section 4. Changes are uncommitted.
 
 ### D. Build plan slices — doc 18
 
@@ -492,6 +569,14 @@ These either land in the first commit's headers or block OH-1.
 - Struct copies and the write barrier, decided with tier 2 (14 §11, item 3).
 - Generational collection (11 §7.7).
 - The four open items in doc 16 and `Thread.Interrupt` semantics (17 §11).
+- [ ] **Constant-array producer limit (B11).** Record the 65536-byte
+  whole-payload limit in the ObjectHandler contract and the future image
+  format, then enforce it before `cli_pack` emits constant arrays. Test a
+  65536-byte payload accepted and the reproduced 65538-byte payload
+  rejected, with no size arithmetic overflow. For accepted arrays, require
+  valid element byrefs to resolve to the same addresses as element
+  pointers. Enforcement and its packer tests are pending; no new runtime
+  check is requested.
 - `12_VXB_Format.md`, the next contract after ObjectHandler v1
   (00 §7.1): it must carry the constant table of 14 §3.5, the statics
   fix-up list of 15 §5.1, and each method's local kinds (14 §6.2).
@@ -538,14 +623,17 @@ done
 
 # 2. Every library file on its own: host and ARM, C99 and C11, debug and release.
 #    The wrapper line keeps a macro-only header from being an empty unit under -pedantic.
-for cc in gcc "/home/wifi/gcc_toolchain/bin/arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb"; do
-  for std in c99 c11; do
-    for rel in "" -DNDEBUG; do
-      for f in source/object_handler/*.[ch]; do
-        printf '#include "%s"\ntypedef int not_empty;\n' "$(basename "$f")" |
-          $cc -std=$std $rel -fsyntax-only -Wall -Wextra -Werror -pedantic -Wshadow \
-            -Wstrict-prototypes -Wmissing-prototypes -I source/object_handler -x c - ||
-          echo "FAIL: ${cc%% *} $std $rel $f"
+for generated in build/oh-debug/source/object_handler/include build/oh-release/source/object_handler/include; do
+  for cc in gcc "/home/wifi/gcc_toolchain/bin/arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb"; do
+    for std in c99 c11; do
+      for rel in "" -DNDEBUG; do
+        for f in source/object_handler/*.[ch]; do
+          printf '#include "%s"\ntypedef int not_empty;\n' "$(basename "$f")" |
+            $cc -std=$std $rel -fsyntax-only -Wall -Wextra -Werror -pedantic -Wshadow \
+              -Wstrict-prototypes -Wmissing-prototypes -I "$generated" \
+              -I source/object_handler -x c - ||
+            echo "FAIL: ${cc%% *} $std $rel $generated $f"
+        done
       done
     done
   done
@@ -554,7 +642,8 @@ done
 # 3. Device code size, release switches.
 root=$PWD; d=$(mktemp -d)
 (cd "$d" && /home/wifi/gcc_toolchain/bin/arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb \
-   -std=c99 -Os -DNDEBUG -c -I "$root/source/object_handler" "$root"/source/object_handler/*.c &&
+  -std=c99 -Os -DNDEBUG -c -I "$root/build/oh-release/source/object_handler/include" \
+  -I "$root/source/object_handler" "$root"/source/object_handler/*.c &&
  /home/wifi/gcc_toolchain/bin/arm-none-eabi-size *.o)
 rm -rf "$d"
 ```
@@ -564,6 +653,47 @@ rm -rf "$d"
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-10-02, fifth part** - C10 implemented at the owner's request:
+  explicit object, string, array and box deletion, with non-recursive
+  ownership and existing allocator checks. Eight cases added; primitive
+  round trips, empty boxes and installed consumers also exercise deletion.
+  Twelve focused cases and the three-build matrix (147 cases each, with
+  expected skips) pass; all 288 host/ARM C99/C11 isolation checks pass.
+  GC is still deferred; explicit reclamation is now supported for long-lived
+  standalone embedders. No executor changes; changes are uncommitted.
+
+- **2026-10-02, fourth part** - C9 implemented: one generated configuration
+  shared by library and callers, compile-time rejection of conflicting
+  switches, and install/export support carrying the same header. Existing
+  debug/release layouts are preserved. A consumer with opposite `NDEBUG`
+  passes; the full three-build matrix (139 cases each) and installed
+  consumers pass, including override checks for all five switches. All 288
+  host/ARM C99/C11 isolation checks pass. C8 is now covered by the matrix.
+  All 140 active-build case reports pass; the full-run wrapper still returns
+  `-1`, while the focused matrix returns success.
+  The device size was not remeasured. Changes are uncommitted.
+
+- **2026-10-02, third part** - B11 decided: trust the producer to keep
+  constant-array payloads, including the header, at most 65536 bytes so
+  byref offsets remain representable. Packer enforcement, contract updates
+  and boundary tests are tracked in E, not marked implemented. No new
+  runtime guard; documentation only, no code or test-result change.
+
+- **2026-10-02, second part** - C8 implemented: the shared constant-time
+  `obj_string_check_const` runs before init and is reused after the constant
+  entry bounds check. The producer contract is explicit in 14; runtime
+  UTF-8 validation is unchanged. Two tests added to `test_spaces.c`; the
+  four focused cases pass, all 137 active Debug case reports pass (the
+  full-run wrapper still returns `-1`), and all 144 host/ARM C99/C11
+  debug/release isolation checks pass. The other test build trees and the
+  device code-size measurement were not rerun. Changes are uncommitted.
+
+- **2026-10-02** - Constant-string validation decision recorded (B10):
+  trust `cli_pack` for UTF-8 and ASCII-flag correctness; independent
+  producers obey the same contract. Retain structural checks and track the
+  minimum shared check in `obj_string.c/.h` as C8, still unbuilt. No library
+  code changed; no new test result is claimed.
 
 - **2026-09-29, fourth part** — B8 solved. A byref to a local or an
   argument needs to say which thread's stack it points into, and the space

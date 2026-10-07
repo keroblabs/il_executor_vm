@@ -4,6 +4,12 @@
 #error "only UTF-8 string payloads are implemented (doc 14 section 5.6)"
 #endif
 
+int obj_string_check_const(obj_handler_t * oh, const uint8_t * payload, uint32_t size)
+{
+    (void)oh;
+    return payload != NULL && size != 0 && payload[size - 1u] == 0;
+}
+
 /* ldstr: a literal is a constant, read in place (doc 14 section 3.5). */
 object_id_t obj_string_intern(obj_handler_t * oh, uint16_t literal_index)
 {
@@ -136,6 +142,14 @@ object_id_t obj_string_create(obj_handler_t * oh, const char * utf8, uint32_t le
     if (id != OBJECT_NULL && len != 0)
         memcpy(objects_ptr(oh, id), utf8, len);
     return id;
+}
+
+void obj_string_delete(obj_handler_t * oh, object_id_t id)
+{
+    object_info_t info;
+
+    if (obj_string_info(oh, id, &info, "obj_string_delete: not a live string"))
+        objects_delete(oh, id);
 }
 
 object_id_t obj_string_concat(obj_handler_t * oh, object_id_t a, object_id_t b)

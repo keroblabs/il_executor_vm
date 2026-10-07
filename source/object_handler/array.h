@@ -9,6 +9,7 @@ extern "C" {
 
 /* One-dimensional, zero-based, fixed length, elements inline (doc 14 section 5.7). */
 object_id_t    array_create(obj_handler_t * oh, uint16_t type, uint16_t elem_size, uint32_t count);
+void           array_delete(obj_handler_t * oh, object_id_t id);
 uint32_t       array_length(obj_handler_t * oh, object_id_t id);
 
 /* The one range check: NULL, or an OBJECT_NULL id, is the program's IndexOutOfRangeException. */
