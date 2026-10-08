@@ -73,6 +73,34 @@ The branch-narrowing fixpoint is the only part with a subtlety: shrink
 optimistically, then re-check, and stop when a pass changes nothing.
 Two or three passes is typical; cap it and fall back to long forms.
 
+### 3.1 Declared storage metadata and boundary normalisation (B9)
+
+**Decision, 2026-10-08:** preserve the standard `ldarg`, `ldloc`, `starg`,
+`stloc`, `ldarga` and `ldloca` encodings, including compact/short/wide forms.
+Emit per-method declared argument/local types rather than inventing typed
+load/store opcodes. The executor derives local stack kinds from those
+types and establishes typed zeros before execution. A VXB reader maps the
+declared storage descriptors to the executor's immutable type tables.
+
+A storage kind alone is insufficient: signed/unsigned short integers and
+`float32` share evaluation-stack kinds with wider values. Loads widen the
+declared storage bytes; stores narrow to the declared width. `bool` uses
+one unsigned byte and `char` two unsigned bytes. `float32` storage is four
+single-precision bytes, never a double slot merely tagged `R8`.
+
+The caller supplies arguments in evaluation-stack form. Method entry must
+validate their kinds and narrow them to parameter storage, including
+rounding `float32`; managed `call` uses the same boundary
+normalisation. Address loads expose those storage bytes through the
+thread-relative stack byref API (14 section 4.1). This metadata and its
+normalisation are correctness requirements, not optional folding.
+
+The executor-first implementation is scoped in
+[20 section 9](20_VXB_Build_Plan.md#9-arguments-and-locals). Packer emission
+remains unbuilt; the direct managed-call boundary is implemented and tested
+in [20 section 11](20_VXB_Build_Plan.md#11-direct-managed-calls). Neither
+executor slice claims packer emission complete.
+
 ---
 
 ## 4. Class 2 — dead-instruction removal

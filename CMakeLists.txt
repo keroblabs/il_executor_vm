@@ -7,6 +7,8 @@ project(                ${MODULE_NAME})
 add_subdirectory(source/object_handler)
 enable_testing()
 add_subdirectory(tests/object_handler)
+add_subdirectory(source/il_executor)
+add_subdirectory(tests/il_executor)
 
 add_definitions(-DUNIX)
 

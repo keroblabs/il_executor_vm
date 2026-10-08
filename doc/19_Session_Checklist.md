@@ -11,8 +11,11 @@ says in what order it is built and what proves each step. This document says
 *where we are* on that path and *what to pick up next*. When it disagrees with
 14 or 18, they win and this document is corrected.
 
-State recorded here: **2026-10-02**, based on commit `4e0bc66`, with C8-C10
-implemented but not yet committed.
+State recorded here: **2026-10-08**. The ObjectHandler baseline is the
+**2026-10-02** record based on commit `4e0bc66`, with C8-C10 then implemented
+but not yet committed. Scalar, argument/local, branch/comparison and direct
+managed-call slices are verified; ObjectHandler and its full-suite baseline
+are unchanged.
 
 ---
 
@@ -27,14 +30,21 @@ project's architecture and rewrites its details
 | Piece | Role | State |
 |---|---|---|
 | `cli_pack` | host tool: reads .NET assemblies, resolves and folds everything it can, writes one `.vxb` image | parser front end done — `source/`, [Phase 0](99_phase0_work.md); the rest not started |
-| `cli_exec` | runs a `.vxb` image, on the device or the host | not started |
+| `cli_exec` | runs a `.vxb` image, on the device or the host | scalar, argument/local, control-flow and direct managed-call core built in `source/il_executor/`; VXB loading and the complete VM are not started |
 | `cli_dump` | prints an image, for inspection and tests | not started |
 | **ObjectHandler** | standalone C library for objects, the heap, per-thread stacks and the collector; knows nothing about CIL | contract [14](14_ObjectHandler.md), plan [18](18_ObjectHandler_Build_Plan.md); **OH-1, OH-2, OH-4, OH-5 and D7 built and tested**, all state in the application's instance, one stack per managed thread; OH-3 deferred by the owner |
 
-**Current focus: ObjectHandler v1**, built in the order of doc 18 and tested
-until it is the component nobody has to suspect. After it come the image
-format (`12_VXB_Format.md`, not yet written) and the `cli_pack` / `cli_exec`
-slices of [00 §4](00_Introduction.md).
+**Current focus: IL executor**, redirected by the owner on 2026-10-08.
+The accepted scalar slice in [20 section 8](20_VXB_Build_Plan.md#8-executor-first-slice)
+is built: integer constants, stack operations, wrapping arithmetic and
+return, with single-step/bounded execution over the real ObjectHandler.
+The argument/local extension in doc 20 section 9 is also built, including
+declared storage normalisation and address loads. Branches, comparisons and
+switches are built and verified in section 10, and iterative direct managed
+calls in section 11. Select the next instruction family before extending
+the executor further. VXB-1 through VXB-8 remain unchecked; the image-format
+contract (`12_VXB_Format.md`) is unwritten. Outstanding ObjectHandler work
+stays in doc 18; GC remains deferred.
 
 **Where the code is.** `source/` holds the parser, which
 [CMakeLists.txt](../CMakeLists.txt) builds into `cli_parser`. The new
@@ -257,11 +267,12 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 | `12_VXB_Format.md` | **not written**; the next contract after ObjectHandler v1 |
 | [13](13_Ruffus_VM_Reuse.md) | Ruffus VM heritage; current |
 | [14](14_ObjectHandler.md) | ObjectHandler contract, normative; one false claim in §1 — B2 |
-| [15](15_Pack_Time_IL_Transforms.md) | pack-time IL transforms; its `conv.i`/`conv.u` fold is too broad — B7; the storage-form transforms are missing — B9 |
+| [15](15_Pack_Time_IL_Transforms.md) | pack-time IL transforms; its `conv.i`/`conv.u` fold is too broad — B7; per-method storage metadata and boundary normalisation recorded — B9 |
 | [16](16_Native_Call_Protocol.md) | native call protocol; four items open |
 | [17](17_Threading_Model.md) | threading model; one item open |
 | [18](18_ObjectHandler_Build_Plan.md) | build plan; D1–D4, OH-1 and OH-2 struck through |
 | 19 | this checklist |
+| [20](20_VXB_Build_Plan.md) | VXB dataset inventory and staged build plan; VXB-1 through VXB-8 not yet implemented |
 | [99](99_phase0_work.md) | Phase 0 record; history |
 
 ### 3.4 Build plan progress
@@ -286,7 +297,8 @@ enum; what each slice takes from Ruffus, as design, is in 13 §§4 and 6.
 
 In order: **A** before any OH-1 code, then **B** and **C**, then the slices
 in **D**. Each item says what to decide or do, what is recommended, and where
-the answer is written down.
+the answer is written down. Owner-directed VXB work is tracked separately
+in **F** and does not make deferred GC a prerequisite.
 
 ### A. Decide first
 
@@ -399,12 +411,13 @@ These either land in the first commit's headers or block OH-1.
   declared type's storage form, so a byref to it behaves like a byref to a
   field. *Recorded in:* 14 §§3.1, 3.3, 4.1, 6.1, 6.2, 6.7, 8 and 11; 11 §5;
   16 §4.1; 18 §12. *Built* (`2663ca2`). Follow-ups: B9, and doc 12 in E.
-- [ ] **B9 — Doc 15 and the storage form** (14 §4.1). `cli_pack` must emit
-  each method's local kinds, and the loads and stores of short-integer and
-  `float32` locals and arguments must widen and narrow: typed forms of
-  `ldloc`, `stloc`, `ldarg` and `starg` — or a per-method type table the
-  interpreter reads — and a `call` that narrows `float32` arguments. Doc 15
-  has no such transform yet.
+- [x] **B9 — Doc 15 and the storage form** (14 §4.1). *Recorded 2026-10-08:*
+  doc 15 section 3.1 chooses per-method declared argument/local type tables
+  and preserves standard opcode encodings. Loads widen, stores and method
+  entry narrow, including actual `float32` storage bytes; local kinds are
+  derived before execution. Implemented and tested in the executor (doc 20
+  sections 9 and 11), including direct managed-call boundary normalisation.
+  Packer metadata emission remains a requirement, not claimed implemented.
 - [x] **B10 - Constant-string trust boundary.** *Decided 2026-10-02:*
   trust `cli_pack` to emit valid UTF-8, the correct byte size including the
   final NUL, and an accurate `OBJECT_H_ASCII` flag for constants in `.vxb`.
@@ -585,6 +598,44 @@ These either land in the first commit's headers or block OH-1.
   formatting and parsing are natives there, written new: Ruffus's `strings.c`
   prints `0` as an empty string and `3.25` as `3`, and parses `"-5"` as 0.
 
+### F. VXB and executor build blocks
+
+- [x] **VXB planning document.** Added at the owner's request on 2026-10-07:
+  [20_VXB_Build_Plan.md](20_VXB_Build_Plan.md), the required datasets, parser
+  inputs, dependencies and proof for each block. No VXB format block is
+  marked built.
+- [x] **VXB header proposals.** Added on 2026-10-08: a block-relative
+  category directory and sized item headers in all ten datasets, preserving
+  the constant/native fixed tables. Draft header changes replace old layouts
+  end to end; version/compatibility control starts at the version-1 freeze.
+- [x] **Executor scalar slice.** Owner accepted the executor-only scope on
+  2026-10-08. `source/il_executor/` and `tests/il_executor/` are built; 23
+  cases pass in sanitized Debug and Release, and 16 host/ARM C99/C11
+  source/header checks pass. See doc 20 section 8 for the contract and limits.
+- [x] **Executor arguments/locals.** Built at the owner's request on
+  2026-10-08: per-method type tables, normalized entry, typed zero locals,
+  compact/short/wide load/store/address instructions and failure checks.
+  All 50 executor cases pass in sanitized Debug and Release; 16 host/ARM
+  C99/C11 source/header checks pass. Contract and record: doc 20 section 9.
+- [x] **Executor branches/comparisons.** Built at the owner's request on
+  2026-10-08: short/long branches, switches and comparison opcodes, typed
+  predicates and validated destinations. All 80 executor cases pass in
+  sanitized Debug and Release; 16 host/ARM C99/C11 source/header checks
+  pass. Contract, profile limits and proof: doc 20 section 10.
+- [x] **Executor managed calls.** Built at the owner's request on
+  2026-10-08: borrowed indexed method table, three-byte direct `call`,
+  shared argument normalisation, saved caller IP and iterative returns.
+  All 113 executor cases pass in sanitized Debug and Release; 16 host/ARM
+  C99/C11 source/header checks pass. I4/void returns only; contract and
+  proof: doc 20 section 11. No recursion through the C interpreter.
+- [ ] **Executor next slice.** Select the next instruction family and its
+  metadata contract; remaining numeric operations or object/field access
+  are candidates. Do not imply native/virtual calls or VXB loading exist.
+- [ ] **VXB-1 - Logical records and first profile.** Deferred while the
+  executor is the owner's focus. The image entry convention and record
+  enumeration values remain open; an executor case is not a packed-image
+  round trip. Remaining VXB block status stays in doc 20.
+
 ---
 
 ## 5. Session protocol
@@ -599,7 +650,7 @@ These either land in the first commit's headers or block OH-1.
 
 ### 5.2 Finishing a session
 
-1. Tick what is done; add every new finding to §4 under A–E, with a pointer to
+1. Tick what is done; add every new finding to §4 under A–F, with a pointer to
    the doc section it concerns.
 2. Fold decisions into 14 §11 or 18 §12 (§2.1, rule 3).
 3. Update §3 where the state changed, and the "state recorded here" line at
@@ -653,6 +704,64 @@ rm -rf "$d"
 ## 6. Session log
 
 Newest first. One entry per session: what changed, and the commits.
+
+- **2026-10-08, managed calls** - Owner requested direct managed calls.
+  Added the borrowed method registry/program entry API and three-byte
+  packed `call`; reused entry normalisation and ObjectHandler frames for
+  iterative nested/recursive calls and returns. Saved continuations must
+  follow a call instruction. Added 33 cases; all 113 executor cases pass
+  in sanitized Debug and Release with ObjectHandler debug checks off.
+  All 16 host/Cortex-M4 C99/C11 source/header checks pass; restored the
+  original active Debug settings. Docs 15/20/19 updated. No VXB, native,
+  virtual, constructor, exception or GC implementation changes; full
+  ObjectHandler suite not rerun. No commit made.
+
+- **2026-10-08, branches/comparisons** - Owner requested control flow.
+  Implemented all short/long truth/equality/relational branches, `switch`
+  and five comparison opcodes using the ObjectHandler comparison helper
+  after type validation. Added shared instruction decoding and offset/
+  boundary checks, including untaken/unselected targets. Added 30 cases;
+  all 80 executor cases pass in sanitized Debug and Release with ObjectHandler
+  debug checks off. All 16 host/Cortex-M4 C99/C11 source/header checks pass.
+  Restored the original active Debug settings. Contract and profile limits
+  recorded in doc 20 section 10. Managed calls are next; no VXB/GC or
+  ObjectHandler implementation changes, no full ObjectHandler suite rerun,
+  and no commit made.
+
+- **2026-10-08, arguments/locals** - Owner requested the next executor
+  slice. Recorded B9 in doc 15 and implemented per-method declared types,
+  argument entry narrowing, typed zero locals, compact/short/wide variable
+  instructions and stack-relative address loads. Added 27 cases, bringing
+  the focused suite to 50; all pass in sanitized Debug and Release with
+  ObjectHandler debug checks off. All 16 host/Cortex-M4 C99/C11 source/header
+  checks pass. Restored the original active Debug settings. No VXB, GC or
+  ObjectHandler implementation changes; full ObjectHandler suite not rerun.
+  Branches/comparisons are next. No commit made.
+
+- **2026-10-08, executor** - Owner redirected work from image writing to
+  the executor and accepted the scalar scope. Added the `il_executor`
+  library and 23 focused cases, reusing ObjectHandler and the existing test
+  harness; no PE/VXB reader or GC changes. All cases pass in sanitized
+  Debug and Release with ObjectHandler debug checks off; 16 host/Cortex-M4
+  C99/C11 source/header isolation checks pass. Standalone ObjectHandler
+  configuration remains independent. Restored the original active Debug
+  settings. Recorded the contract/proof in doc 20 section 8. Arguments and
+  locals are next; VXB build blocks stay unchecked. No commit made.
+
+- **2026-10-08** - Added proposed block/category/item headers to doc 20 at
+  the owner's request, including payload/offset rules, lookup information
+  and one Header topic per required dataset. Retained the existing 12-byte
+  constant and native-binding tables. Recorded the owner's development
+  policy: replace draft layouts end to end, immediately deprecate old
+  drafts, and begin version control only at the version-1 freeze. All build
+  blocks remain unchecked; documentation only, no runtime code or commit.
+
+- **2026-10-07** - Added doc 20 at the owner's request: necessary VXB
+  datasets, parser-to-runtime gaps, staged packer/reader blocks and their
+  verification criteria. Added the document-index link and checklist F;
+  VXB-1 is next. Binary layouts and profile choices remain explicitly open.
+  Documentation only: no packer/executor code, no new runtime test result,
+  and no change to the deferred GC milestone. No commit made.
 
 - **2026-10-02, fifth part** - C10 implemented at the owner's request:
   explicit object, string, array and box deletion, with non-recursive

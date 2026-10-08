@@ -1127,6 +1127,10 @@ after** — not as speculative design ahead of both.
 - [19_Session_Checklist.md](19_Session_Checklist.md) — where the work
   stands, the rules it follows, and the ordered checklist of what remains.
   **Read first in every session; update at the end.**
+- [20_VXB_Build_Plan.md](20_VXB_Build_Plan.md) - the required image
+  datasets, their parser sources and runtime consumers, and the staged
+  packer/reader blocks with verification criteria. A plan, not a replacement
+  for the binary-format contract in `12_VXB_Format.md`.
 - [10_Native_Assembly_Layout.md](10_Native_Assembly_Layout.md) — the
   `Native.*` assembly matrix, ref/impl split, `nativegen`, per-peripheral
   host behaviour, and the future AOT work. **§§4–8 are deferred** until
